@@ -1,6 +1,23 @@
 import AppKit
 import SwiftTerm
 
+/// Terminal do painel. A janela do Duo é arrastável pelo fundo (titlebar oculta), e
+/// por padrão o AppKit rouba o clique-e-arraste dentro do terminal para mover a
+/// janela, o que impede selecionar texto com o mouse.
+final class PaneTerminalView: LocalProcessTerminalView {
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    /// A seleção que o Cmd+A fez na caixa de prompt, para tirar as bordas da caixa
+    /// na hora de copiar.
+    var promptSelection: (start: Position, end: Position)?
+
+    override func copy(_ sender: Any?) {
+        guard let text = promptSelectionText() else { return super.copy(sender) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
 /// Cmd+A nos painéis: seleciona só o texto que você está digitando na caixa de
 /// prompt do Claude Code, em vez do terminal inteiro.
 ///
@@ -13,8 +30,8 @@ enum InputSelection {
     static func install() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                  event.charactersIgnoringModifiers == "a",
+            guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+                  event.charactersIgnoringModifiers?.lowercased() == "a",
                   let terminal = focusedTerminal(),
                   terminal.selectCurrentInput()
             else { return event }
@@ -34,9 +51,14 @@ enum InputSelection {
 }
 
 extension LocalProcessTerminalView {
-    /// Bordas da caixa de prompt e marcadores de prompt que o Claude Code usa.
+    /// O Claude Code já desenhou a caixa de prompt de duas formas: com bordas em
+    /// volta ("│ > texto │") e com uma régua horizontal acima e abaixo ("❯ texto").
     fileprivate static let borders: Set<Character> = ["│", "┃", "┆", "┊", "║", "|"]
     fileprivate static let markers: Set<Character> = [">", "❯", "›", "»"]
+    fileprivate static let ruleChars: Set<Character> = [
+        "─", "━", "═", "╌", "╍", "┄", "┅", "┈", "┉", "-", "_",
+        "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "├", "┤", "│", "┃", "║",
+    ]
 
     /// Seleciona o texto da caixa de prompt visível. `false` quando não há caixa
     /// na tela, quando nada foi digitado ainda, ou quando essa mesma seleção já
@@ -45,6 +67,7 @@ extension LocalProcessTerminalView {
         // `terminal` e `selection` são internos ao SwiftTerm; a reflexão é a
         // única forma de chegar neles sem manter um fork da biblioteca.
         guard let terminal: Terminal = reflect(), let selection: SelectionService = reflect() else {
+            Self.log("não achei o Terminal/SelectionService do SwiftTerm")
             return false
         }
 
@@ -57,29 +80,58 @@ extension LocalProcessTerminalView {
                 return line
             }
 
-            // A caixa do prompt fica na parte de baixo da tela.
+            // O texto que você está digitando é onde o cursor está. Daí sobe-se até
+            // a linha que abre a caixa. Sem cursor na caixa, procura-se a última
+            // caixa da tela, de baixo para cima.
+            let cursorRow = min(max(terminal.buffer.y, 0), terminal.rows - 1)
+            let cursorCol = terminal.buffer.x
             var prompt: (row: Int, col: Int)?
-            for row in stride(from: terminal.rows - 1, through: 0, by: -1) {
-                if let col = Self.inputStart(in: cells(row)) {
-                    prompt = (row, col)
+            var up = cursorRow
+            while up >= 0, !Self.isRule(cells(up)) {
+                if let col = Self.inputStart(in: cells(up)) {
+                    prompt = (up, col)
                     break
                 }
+                up -= 1
             }
-            guard let prompt else { return nil }
+            if prompt == nil {
+                for row in stride(from: terminal.rows - 1, through: 0, by: -1) {
+                    if let col = Self.inputStart(in: cells(row)) {
+                        prompt = (row, col)
+                        break
+                    }
+                }
+            }
+            guard let prompt else {
+                Self.log("nenhuma caixa de prompt na tela (cursor em \(cursorRow),\(cursorCol))")
+                return nil
+            }
+            // Cursor na caixa e nada digitado ainda: deixa o Cmd+A normal passar.
+            if cursorRow == prompt.row, cursorCol <= prompt.col {
+                Self.log("caixa vazia")
+                return nil
+            }
 
-            // Linhas seguintes da mesma caixa, quando o texto quebrou em várias.
+            // Linhas seguintes, quando o texto digitado quebrou em várias.
             var lastRow = prompt.row
-            var row = prompt.row + 1
-            while row < terminal.rows, Self.isBoxLine(cells(row)) {
-                lastRow = row
-                row += 1
+            if cursorRow > prompt.row, !Self.isRule(cells(cursorRow)) {
+                lastRow = cursorRow
+            } else {
+                var row = prompt.row + 1
+                while row < terminal.rows, Self.isContinuation(cells(row)) {
+                    lastRow = row
+                    row += 1
+                }
             }
             // Despreza as linhas da caixa que ficaram vazias.
             while lastRow > prompt.row, Self.contentEnd(in: cells(lastRow), from: 0) == nil {
                 lastRow -= 1
             }
             let from = lastRow == prompt.row ? prompt.col : 0
-            guard let endCol = Self.contentEnd(in: cells(lastRow), from: from) else { return nil }
+            guard let endCol = Self.contentEnd(in: cells(lastRow), from: from) else {
+                Self.log("caixa sem texto digitado")
+                return nil
+            }
 
             let offset = terminal.buffer.yDisp
             return (Position(col: prompt.col, row: prompt.row + offset),
@@ -89,35 +141,77 @@ extension LocalProcessTerminalView {
 
         // Cmd+A de novo em cima da mesma seleção: deixa passar para selecionar tudo.
         if selection.active, selection.start == range.start, selection.end == range.end {
+            Self.log("mesma seleção de novo: segue o Cmd+A normal")
             return false
         }
 
         terminal.terminalLock.withLock {
             selection.setSelection(start: range.start, end: range.end)
         }
+        (self as? PaneTerminalView)?.promptSelection = range
         needsDisplay = true
         return true
     }
 
-    /// Coluna onde começa o texto digitado numa linha "│ > texto", ou nil se a
-    /// linha não abre uma caixa de prompt.
-    fileprivate static func inputStart(in line: [Character]) -> Int? {
-        guard var i = line.firstIndex(where: { !isBlank($0) }), borders.contains(line[i]) else {
-            return nil
-        }
-        i += 1
-        while i < line.count, isBlank(line[i]) { i += 1 }
-        guard i < line.count, markers.contains(line[i]) else { return nil }
-        // "> " e não ">>" nem "> " colado em outra coisa.
-        guard i + 1 < line.count, isBlank(line[i + 1]) else { return nil }
-        return min(i + 2, line.count - 1)
+    /// O texto da caixa de prompt sem as bordas que o SwiftTerm inclui quando a
+    /// seleção passa de uma linha. nil quando a seleção atual não é a do Cmd+A.
+    func promptSelectionText() -> String? {
+        guard let pane = self as? PaneTerminalView,
+              let saved = pane.promptSelection,
+              let selection: SelectionService = reflect(),
+              selection.active,
+              selection.start == saved.start, selection.end == saved.end,
+              let raw = getSelection()
+        else { return nil }
+        return Self.stripBorders(raw)
     }
 
-    /// A linha ainda faz parte da caixa: começa com borda lateral, e não com o
-    /// rodapé "╰────╯".
-    fileprivate static func isBoxLine(_ line: [Character]) -> Bool {
-        guard let i = line.firstIndex(where: { !isBlank($0) }) else { return false }
-        return borders.contains(line[i])
+    /// Tira a borda lateral das linhas de continuação ("│   resto do texto").
+    fileprivate static func stripBorders(_ text: String) -> String {
+        text.components(separatedBy: "\n").enumerated().map { index, line -> String in
+            var chars = Array(line)
+            while let last = chars.last, isBlank(last) { chars.removeLast() }
+            if let last = chars.last, borders.contains(last) {
+                chars.removeLast()
+                while let last = chars.last, isBlank(last) { chars.removeLast() }
+            }
+            guard index > 0 else { return String(chars) }
+            var i = 0
+            while i < chars.count, isBlank(chars[i]) { i += 1 }
+            guard i < chars.count, borders.contains(chars[i]) else { return String(chars) }
+            i += 1
+            while i < chars.count, isBlank(chars[i]) { i += 1 }
+            return String(chars[i...])
+        }.joined(separator: "\n")
+    }
+
+    /// Coluna onde começa o texto digitado numa linha de prompt ("❯ texto" ou
+    /// "│ > texto"), ou nil se a linha não abre uma caixa de prompt.
+    fileprivate static func inputStart(in line: [Character]) -> Int? {
+        guard var i = line.firstIndex(where: { !isBlank($0) }) else { return nil }
+        if borders.contains(line[i]) {
+            i += 1
+            while i < line.count, isBlank(line[i]) { i += 1 }
+        }
+        guard i < line.count, markers.contains(line[i]) else { return nil }
+        i += 1
+        // "> texto" e não ">>" nem ">" colado em outra coisa.
+        guard i == line.count || isBlank(line[i]) else { return nil }
+        while i < line.count, isBlank(line[i]) { i += 1 }
+        return min(i, max(line.count - 1, 0))
+    }
+
+    /// A linha é uma régua da moldura ("────" ou "╰────╯"), o que fecha a caixa.
+    fileprivate static func isRule(_ line: [Character]) -> Bool {
+        let content = line.filter { !isBlank($0) }
+        return !content.isEmpty && content.allSatisfy { ruleChars.contains($0) }
+    }
+
+    /// A linha continua o texto digitado: tem conteúdo, não é régua e não abre
+    /// outra caixa de prompt.
+    fileprivate static func isContinuation(_ line: [Character]) -> Bool {
+        guard line.contains(where: { !isBlank($0) }) else { return false }
+        return !isRule(line) && inputStart(in: line) == nil
     }
 
     /// Coluna logo depois do último caractere digitado, desprezando a borda
@@ -136,6 +230,15 @@ extension LocalProcessTerminalView {
 
     fileprivate static func isBlank(_ c: Character) -> Bool {
         c == "\0" || c == " " || c.isWhitespace
+    }
+
+    /// Com DUO_DEBUG_SELECTION no ambiente, conta no Console por que o Cmd+A não
+    /// achou a caixa de prompt.
+    fileprivate static let debugSelection = ProcessInfo.processInfo.environment["DUO_DEBUG_SELECTION"] != nil
+
+    fileprivate static func log(_ message: String) {
+        guard debugSelection else { return }
+        NSLog("[duo cmd+a] %@", message)
     }
 
     private func reflect<T>() -> T? {

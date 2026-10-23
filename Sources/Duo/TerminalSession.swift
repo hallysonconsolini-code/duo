@@ -15,13 +15,6 @@ enum PaneStatus {
     }
 }
 
-/// Terminal do painel. A janela do Duo é arrastável pelo fundo (titlebar oculta), e
-/// por padrão o AppKit rouba o clique-e-arraste dentro do terminal para mover a
-/// janela, o que impede selecionar texto com o mouse.
-final class PaneTerminalView: LocalProcessTerminalView {
-    override var mouseDownCanMoveWindow: Bool { false }
-}
-
 /// Endereço do servidor local que os painéis usam para MCP e hooks.
 struct BridgeInfo {
     let port: UInt16
