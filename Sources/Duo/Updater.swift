@@ -1,7 +1,11 @@
 import AppKit
 
-/// Procura versões novas nas releases do GitHub (repositório privado, lido com o `gh`
-/// já logado no Mac), baixa o DMG e substitui o app instalado.
+/// Procura versões novas nas releases públicas do GitHub (API sem login, URLSession), baixa o
+/// DMG e substitui o app instalado. Se a API pública não responder (404 com o repositório
+/// privado, rede ou limite de taxa) e o `gh` estiver instalado e logado, usa o `gh`.
+///
+/// A verificação automática roda uma vez, 3s depois de abrir o app (AppDelegate); fora isso só
+/// a pedido, em "Procurar atualizações…". A API sem login permite 60 consultas por hora por IP.
 @MainActor
 final class Updater: ObservableObject {
     static let repo = "hallysonconsolini-code/duo"
@@ -10,6 +14,8 @@ final class Updater: ObservableObject {
         let tag: String
         let version: String
         let notes: String
+        /// Link do DMG na API pública; nil quando a release veio do `gh`.
+        var dmgURL: URL?
     }
 
     @Published private(set) var available: Release?
@@ -58,14 +64,58 @@ final class Updater: ObservableObject {
         install(release)
     }
 
+    /// API pública primeiro; se falhar e houver `gh`, o caminho com o `gh`.
     private func fetchLatest() async throws -> Release {
-        let data = try await Self.gh(["api", "repos/\(Self.repo)/releases/latest"])
+        do {
+            return try await Self.fetchPublic()
+        } catch let publicError {
+            guard Self.ghPath != nil else { throw Self.noGhError(after: publicError) }
+            return try await Self.fetchWithGh()
+        }
+    }
+
+    private static func fetchPublic() async throws -> Release {
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Duo", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw HTTPFailure(status: status) }
+        return try parse(data)
+    }
+
+    private static func fetchWithGh() async throws -> Release {
+        try parse(try await gh(["api", "repos/\(repo)/releases/latest"]))
+    }
+
+    private static func parse(_ data: Data) throws -> Release {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = json["tag_name"] as? String else {
             throw UpdateError("Resposta inesperada do GitHub.")
         }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-        return Release(tag: tag, version: version, notes: json["body"] as? String ?? "")
+        let assets = json["assets"] as? [[String: Any]] ?? []
+        let dmg = assets.first { ($0["name"] as? String)?.hasSuffix(".dmg") == true }
+            .flatMap { $0["browser_download_url"] as? String }
+            .flatMap(URL.init(string:))
+        return Release(tag: tag, version: version, notes: json["body"] as? String ?? "", dmgURL: dmg)
+    }
+
+    /// Resposta HTTP que não é 200 da API pública (404 = repositório privado).
+    private struct HTTPFailure: Error { let status: Int }
+
+    /// Mensagem para quando a API pública falhou e não há `gh` para tentar.
+    private static func noGhError(after error: Error) -> UpdateError {
+        if let http = error as? HTTPFailure {
+            switch http.status {
+            case 404: return UpdateError("Não encontrei a versão mais recente do Duo. O repositório não está público e o GitHub CLI (gh) não está instalado.")
+            case 403, 429: return UpdateError("O GitHub limitou as consultas por agora. Tente de novo daqui a uma hora.")
+            default: return UpdateError("O GitHub respondeu com erro \(http.status). Tente de novo mais tarde.")
+            }
+        }
+        if error is URLError { return UpdateError("Sem conexão com o GitHub. Confira a internet e tente de novo.") }
+        return UpdateError(error.localizedDescription)
     }
 
     static func isNewer(_ a: String, than b: String) -> Bool {
@@ -98,7 +148,16 @@ final class Updater: ObservableObject {
     private func download(_ release: Release) async throws -> URL {
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("duo-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        _ = try await Self.gh(["release", "download", release.tag, "-R", Self.repo, "-p", "*.dmg", "-D", work.path, "--clobber"])
+        if let url = release.dmgURL {
+            do {
+                try await Self.downloadPublic(url, to: work)
+            } catch {
+                guard Self.ghPath != nil else { throw Self.noGhError(after: error) }
+                try await Self.downloadWithGh(release, to: work)
+            }
+        } else {
+            try await Self.downloadWithGh(release, to: work)
+        }
         guard let dmg = try FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)
             .first(where: { $0.pathExtension == "dmg" }) else {
             throw UpdateError("A release \(release.tag) não tem DMG.")
@@ -116,6 +175,20 @@ final class Updater: ObservableObject {
             throw UpdateError("O DMG baixado não contém o Duo.")
         }
         return staged
+    }
+
+    private static func downloadPublic(_ url: URL, to work: URL) async throws {
+        var request = URLRequest(url: url)
+        request.setValue("Duo", forHTTPHeaderField: "User-Agent")
+        let (file, response) = try await URLSession.shared.download(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw HTTPFailure(status: status) }
+        let name = url.lastPathComponent.hasSuffix(".dmg") ? url.lastPathComponent : "Duo.dmg"
+        try FileManager.default.moveItem(at: file, to: work.appendingPathComponent(name))
+    }
+
+    private static func downloadWithGh(_ release: Release, to work: URL) async throws {
+        _ = try await gh(["release", "download", release.tag, "-R", repo, "-p", "*.dmg", "-D", work.path, "--clobber"])
     }
 
     /// Um script em segundo plano espera o app fechar, troca o bundle e abre a versão nova.
