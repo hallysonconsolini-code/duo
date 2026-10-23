@@ -43,7 +43,7 @@ struct TeamSetupView: View {
                 .frame(minHeight: 400)
                 footer
             }
-            .frame(maxWidth: 760)
+            .frame(maxWidth: 840)
             .frame(maxWidth: .infinity)
         }
         .background(Theme.bg)
@@ -88,6 +88,7 @@ struct TeamSetupView: View {
             }
             Spacer(minLength: 0)
             Button(directory == nil ? "Selecionar pasta…" : "Trocar", action: chooseFolder)
+                .buttonStyle(.duo(directory == nil ? .primary : .secondary))
         }
         .padding(.horizontal, 16)
         .frame(height: 64)
@@ -172,15 +173,13 @@ struct TeamSetupView: View {
     }
 
     private var counters: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             ForEach(TeamRole.allCases) { role in
                 let n = slots.filter { $0.role == role }.count
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text(role.short).font(Theme.mono(10.5, .bold)).foregroundStyle(role.color)
-                    GlyphButton(glyph: "−", help: "Remover \(role.short)", size: 11) { removeLast(role) }
-                        .disabled(n == 0)
-                    Text("\(n)").font(Theme.mono(11)).foregroundStyle(Theme.soft).frame(minWidth: 10)
-                    GlyphButton(glyph: "+", help: "Adicionar \(role.short)", size: 11) { add(role) }
+                    CountStepper(value: n, tint: role.color, help: role.short,
+                                 decrement: { removeLast(role) }, increment: { add(role) })
                 }
             }
             Spacer(minLength: 0)
@@ -194,16 +193,14 @@ struct TeamSetupView: View {
                 .font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: 26, alignment: .leading)
             Text(slot.role.title)
                 .font(Theme.mono(11.5, .bold)).foregroundStyle(slot.role.color)
-                .frame(width: 96, alignment: .leading)
+                .frame(width: 88, alignment: .leading)
             accountPicker(Binding(get: { slots[index].accountID }, set: { slots[index].accountID = $0 }))
-            Picker("", selection: Binding(get: { slots[index].model }, set: { slots[index].model = $0; edited() })) {
-                ForEach(AIModel.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden().pickerStyle(.menu).frame(width: 96)
-            Picker("", selection: Binding(get: { slots[index].effort }, set: { slots[index].effort = $0; edited() })) {
-                ForEach(Effort.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden().pickerStyle(.menu).frame(width: 86)
+            SegmentedChoice(options: AIModel.allCases,
+                            selection: Binding(get: { slots[index].model }, set: { slots[index].model = $0; edited() }),
+                            label: { $0.rawValue }, tint: slot.role.color)
+            SegmentedChoice(options: Effort.allCases,
+                            selection: Binding(get: { slots[index].effort }, set: { slots[index].effort = $0; edited() }),
+                            label: { $0.label }, tint: slot.role.color)
             Spacer(minLength: 0)
             GlyphButton(glyph: "×", help: "Remover", size: 11) {
                 slots.remove(at: index)
@@ -211,16 +208,12 @@ struct TeamSetupView: View {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 34)
+        .frame(height: 38)
     }
 
     private func accountPicker(_ binding: Binding<UUID?>) -> some View {
-        Picker("", selection: binding) {
-            ForEach(accounts.accounts) { account in
-                Text(account.name).tag(Optional(account.id))
-            }
-        }
-        .labelsHidden().pickerStyle(.menu).frame(width: 110)
+        DuoMenuPicker(options: accounts.accounts.map { .init(value: Optional($0.id), label: $0.name, color: $0.color) },
+                      selection: binding, width: 110)
     }
 
     private var footer: some View {
@@ -228,23 +221,27 @@ struct TeamSetupView: View {
             if choice != .single {
                 if let name = savingName {
                     TextField("Nome do template", text: Binding(get: { name }, set: { savingName = $0 }))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
+                        .textFieldStyle(.plain)
+                        .duoField(width: 180)
                         .focused($nameFocused)
                         .onSubmit(saveTemplate)
                     Button("Salvar", action: saveTemplate)
+                        .buttonStyle(.duo(.secondary))
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button("Cancelar") { savingName = nil }
+                        .buttonStyle(.duo(.ghost))
                 } else {
                     Button("Salvar como template") {
                         savingName = ""
                         nameFocused = true
                     }
+                    .buttonStyle(.duo(.ghost))
                     .disabled(slots.isEmpty)
                 }
             }
             Spacer()
             Button("Cancelar") { cockpit.teamSetup = nil }
+                .buttonStyle(.duo(.secondary))
                 .keyboardShortcut(.cancelAction)
             Button(confirmTitle) {
                 guard let directory else { return }
@@ -252,6 +249,7 @@ struct TeamSetupView: View {
                 cockpit.finishTeamSetup(request, directory: directory,
                                         slots: choice == .single ? [] : slots, singleAccount: singleAccount)
             }
+            .buttonStyle(.duo(.primary))
             .keyboardShortcut(.defaultAction)
             .disabled(directory == nil || (choice != .single && slots.isEmpty))
         }

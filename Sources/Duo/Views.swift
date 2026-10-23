@@ -572,7 +572,11 @@ private struct RolePicker: View {
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(active && focused ? Theme.accent.opacity(0.12)
                                                            : active ? Theme.bar : .clear))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(active ? (focused ? Theme.accent.opacity(0.45) : Theme.paneBorder) : .clear, lineWidth: 1))
         .contentShape(Rectangle())
+        // O mouse move a seleção, como num menu; clique abre.
+        .onHover { if $0 { index = i } }
         .onTapGesture { open(i) }
     }
 
@@ -686,11 +690,19 @@ private struct ActionRow: View {
             HStack(spacing: 14) {
                 Text(keys).foregroundStyle(color).frame(width: 44, alignment: .leading)
                 Text(label).foregroundStyle(hover ? Theme.text : Theme.soft)
+                Spacer(minLength: 0)
+                Text("→").foregroundStyle(hover ? color : .clear)
             }
             .font(Theme.mono(12))
+            .padding(.horizontal, 10)
+            .frame(width: 340, height: 30)
+            .background(RoundedRectangle(cornerRadius: 6).fill(hover ? Theme.bar : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(hover ? Theme.paneBorder : .clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.leading, -10)
         .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
     }
 }

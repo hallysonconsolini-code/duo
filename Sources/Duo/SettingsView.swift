@@ -18,18 +18,20 @@ struct SettingsView: View {
                         .tag(account.id)
                     }
                 }
-                HStack(spacing: 0) {
+                HStack(spacing: 2) {
                     Button {
                         store.addAccount()
                         selection = store.accounts.last?.id
-                    } label: { Image(systemName: "plus").frame(width: 24, height: 20) }
+                    } label: { Text("+").frame(width: 12) }
+                    .help("Adicionar conta")
                     Button {
                         if let id = selection { removeAccount(id) }
-                    } label: { Image(systemName: "minus").frame(width: 24, height: 20) }
+                    } label: { Text("−").frame(width: 12) }
+                    .help("Remover conta")
                     .disabled(selection == nil || store.accounts.count <= 1)
                     Spacer()
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.duo(.ghost, height: 22))
                 .padding(6)
             }
             .frame(width: 180)
@@ -101,6 +103,7 @@ private struct AccountEditor: View {
                             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                             NSWorkspace.shared.activateFileViewerSelecting([dir])
                         }
+                        .buttonStyle(.duo(.secondary, height: 22))
                     }
                 }
                 Text("Para entrar ou trocar de conta, rode /login num painel desta conta. Mudanças valem para novos painéis.")
@@ -110,6 +113,7 @@ private struct AccountEditor: View {
 
             Section("claude.ai") {
                 Button("Sair do claude.ai nesta conta…") { logoutWeb() }
+                    .buttonStyle(.duo(.secondary))
             }
         }
         .formStyle(.grouped)
