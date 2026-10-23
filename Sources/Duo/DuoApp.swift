@@ -1,0 +1,93 @@
+import SwiftUI
+import AppKit
+
+@main
+struct DuoApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var accounts: AccountStore
+    @StateObject private var workspaces: WorkspaceStore
+    @StateObject private var cockpit: Cockpit
+
+    init() {
+        let accounts = AccountStore()
+        let workspaces = WorkspaceStore()
+        let cockpit = Cockpit(accounts: accounts, workspaces: workspaces)
+        _accounts = StateObject(wrappedValue: accounts)
+        _workspaces = StateObject(wrappedValue: workspaces)
+        _cockpit = StateObject(wrappedValue: cockpit)
+        AppDelegate.cockpit = cockpit
+    }
+
+    var body: some Scene {
+        Window("Duo", id: "main") {
+            CockpitView()
+                .environmentObject(accounts)
+                .environmentObject(workspaces)
+                .environmentObject(cockpit)
+        }
+        .defaultSize(width: 1440, height: 900)
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Novo painel") {
+                    cockpit.addPane(kind: .claude, accountID: cockpit.focusedAccountID)
+                }
+                .keyboardShortcut("t", modifiers: .command)
+                Button("Novo painel com outra conta") {
+                    cockpit.addPane(kind: .claude, accountID: cockpit.otherAccountID)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("Abrir pasta como workspace…") { cockpit.openWorkspace() }
+                    .keyboardShortcut("n", modifiers: .command)
+                Divider()
+                Button("Fechar painel") { cockpit.closeFocusedPane() }
+                    .keyboardShortcut("w", modifiers: .command)
+            }
+            CommandMenu("Painel") {
+                Button(cockpit.zoomed ? "Sair do zoom" : "Zoom no painel") { cockpit.zoomed.toggle() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                Divider()
+                ForEach(1..<10) { n in
+                    Button("Ir para painel \(n)") { cockpit.focusPane(number: n) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+                }
+                Divider()
+                Button("Workspace anterior") { cockpit.cycleWorkspace(-1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                Button("Próximo workspace") { cockpit.cycleWorkspace(1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .preferredColorScheme(.dark)
+                .environmentObject(accounts)
+                .environmentObject(cockpit)
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static var cockpit: Cockpit?
+
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Snapshot.scheduleIfRequested()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let cockpit = Self.cockpit, cockpit.anyRunning else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Encerrar o Duo?"
+        alert.informativeText = "Os Claude Code abertos serão encerrados. Os painéis reabrem e retomam as conversas na próxima vez."
+        alert.addButton(withTitle: "Encerrar")
+        alert.addButton(withTitle: "Cancelar")
+        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        cockpit.terminateAll()
+        return .terminateNow
+    }
+}
