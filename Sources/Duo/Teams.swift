@@ -281,8 +281,9 @@ enum TeamPrompt {
         var text = """
         # Equipe Duo
         Você faz parte de uma equipe de Claude Code no app Duo, trabalhando no projeto \(path(projectDir)).
-        Equipe:
+        Equipe quando você entrou:
         \(roster)
+        Membros podem entrar depois: use list_panes para ver a equipe atual antes de distribuir ou pedir algo.
 
         Comunicação: use as ferramentas do servidor MCP "duo". send_to_pane manda uma mensagem para um colega, \
         wait_for_pane espera ele terminar e devolve a resposta final, read_pane lê a última resposta, list_panes \

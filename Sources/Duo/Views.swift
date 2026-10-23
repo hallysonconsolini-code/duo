@@ -396,7 +396,9 @@ private struct PaneView: View {
         let accent = account?.color ?? Theme.dim
         VStack(spacing: 0) {
             PaneChrome(pane: pane, account: account, isFocused: isFocused)
-            if pane.kind == .claude, let term = cockpit.terminal(pane.id) {
+            if pane.isAwaitingRole {
+                RolePicker(pane: pane, isFocused: isFocused)
+            } else if pane.kind == .claude, let term = cockpit.terminal(pane.id) {
                 TerminalPaneHost(term: term)
             } else if let view = cockpit.view(for: pane) {
                 PaneHost(view: view, inset: 0)
@@ -437,6 +439,8 @@ private struct PaneChrome: View {
             Chip(text: pane.name, color: Theme.soft, bold: false)
             if let role = pane.role {
                 Chip(text: role.short, color: role.color)
+            } else if pane.isAwaitingRole {
+                Chip(text: "escolher papel", color: Theme.dim, bold: false, size: 10)
             }
             if let term, term.requestedModel != nil {
                 TerminalModelChip(term: term)
@@ -497,6 +501,95 @@ private struct PaneChrome: View {
             Divider()
         }
         Button("Fechar \(pane.name)") { cockpit.closePane(pane.id) }
+    }
+}
+
+/// Centro de um painel aberto pelo ⌘T: escolher o papel antes de iniciar o claude.
+/// Setas ou números escolhem, Enter abre, Esc fecha o painel.
+private struct RolePicker: View {
+    @EnvironmentObject var cockpit: Cockpit
+    @EnvironmentObject var workspaces: WorkspaceStore
+    let pane: PaneSpec
+    let isFocused: Bool
+
+    /// nil = sem papel.
+    private let options: [TeamRole?] = [nil] + TeamRole.allCases.map { $0 }
+    @State private var index = 0
+    @FocusState private var focused: Bool
+
+    /// Devs que já estão no workspace (decide se um novo dev ganha worktree).
+    private var devCount: Int {
+        (workspaces.workspace(containing: pane.id)?.panes ?? [])
+            .filter { $0.id != pane.id && $0.role?.isDev == true }.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            SectionLabel(text: "Papel de \(pane.name)").padding(.horizontal, 10).padding(.bottom, 6)
+            ForEach(options.indices, id: \.self) { i in
+                row(i)
+            }
+            Text("↑↓ ou 1–\(options.count) · ↩ abre · esc fecha")
+                .font(Theme.mono(10)).foregroundStyle(Theme.faint)
+                .padding(.horizontal, 10).padding(.top, 8)
+        }
+        .frame(width: 300)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.bg)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            cockpit.focusedPane = pane.id
+            focused = true
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onKeyPress(.upArrow) { move(-1); return .handled }
+        .onKeyPress(.downArrow) { move(1); return .handled }
+        .onKeyPress(.return) { open(index); return .handled }
+        .onKeyPress(.escape) { cockpit.closePane(pane.id, confirm: false); return .handled }
+        .onKeyPress(characters: .decimalDigits, phases: .down) { press in
+            guard let n = Int(press.characters), n >= 1, n <= options.count else { return .ignored }
+            open(n - 1)
+            return .handled
+        }
+        .onAppear { if isFocused { focused = true } }
+        .onChange(of: isFocused) { _, now in if now { focused = true } }
+    }
+
+    private func row(_ i: Int) -> some View {
+        let role = options[i]
+        let active = i == index
+        return HStack(spacing: 10) {
+            Text("\(i + 1)").font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: 12)
+            Text(role?.title ?? "Sem papel")
+                .font(Theme.mono(11.5, .bold))
+                .foregroundStyle(role?.color ?? (active ? Theme.text : Theme.soft))
+            Spacer(minLength: 0)
+            Text(subtitle(role)).font(Theme.mono(10)).foregroundStyle(Theme.faint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(active && focused ? Theme.accent.opacity(0.12)
+                                                           : active ? Theme.bar : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture { open(i) }
+    }
+
+    private func subtitle(_ role: TeamRole?) -> String {
+        guard let role else { return "claude code comum" }
+        var text = "\(role.defaultModel.rawValue) · \(role.defaultEffort.label)"
+        if role.isDev, devCount >= 1 { text += " · worktree" }
+        return text
+    }
+
+    private func move(_ delta: Int) {
+        index = (index + delta + options.count) % options.count
+    }
+
+    private func open(_ i: Int) {
+        cockpit.focusedPane = pane.id
+        cockpit.chooseRole(options[i], for: pane.id)
     }
 }
 

@@ -141,18 +141,12 @@ final class Cockpit: ObservableObject {
             guard let accountID = slot.accountID ?? accounts.accounts.first?.id else { continue }
             let name = draft.nextPaneName()
             var pane = PaneSpec(kind: .claude, name: name, accountID: accountID, directory: ws.directory)
-            pane.role = slot.role
-            pane.model = slot.model.rawValue
-            pane.effort = slot.effort.rawValue
-            if slot.role.isDev, devCount >= 2, let tree = Worktrees.create(for: ws.directory, paneName: name) {
-                pane.directory = tree.directory
-                pane.branch = tree.branch
-            }
+            assign(slot, to: &pane, isolate: devCount >= 2, projectDir: ws.directory)
             draft.panes.append(pane)
             specs.append(pane)
         }
         // A equipe inteira deste workspace (inclui membros que já estavam lá).
-        let team = draft.panes.filter { $0.kind == .claude && $0.role != nil }
+        let team = Self.team(of: draft)
         for i in specs.indices {
             specs[i].systemPrompt = TeamPrompt.build(for: specs[i], team: team, projectDir: ws.directory)
         }
@@ -162,9 +156,45 @@ final class Cockpit: ObservableObject {
         focusedPane = (specs.first { $0.role == .manager } ?? specs.first)?.id
     }
 
+    /// Dá papel, modelo e esforço a um painel. Dev com `isolate` ganha um git worktree próprio.
+    private func assign(_ slot: TeamSlot, to pane: inout PaneSpec, isolate: Bool, projectDir: String) {
+        pane.role = slot.role
+        pane.model = slot.model.rawValue
+        pane.effort = slot.effort.rawValue
+        if slot.role.isDev, isolate, let tree = Worktrees.create(for: projectDir, paneName: pane.name) {
+            pane.directory = tree.directory
+            pane.branch = tree.branch
+        }
+    }
+
+    /// Membros com papel de um workspace (para o system prompt).
+    private static func team(of ws: Workspace) -> [PaneSpec] {
+        ws.panes.filter { $0.kind == .claude && $0.role != nil }
+    }
+
+    /// Conclui o "escolher papel" de um painel aberto pelo ⌘T e inicia o claude.
+    /// `role` nil = Claude Code comum, sem papel.
+    func chooseRole(_ role: TeamRole?, for paneID: UUID) {
+        guard let ws = workspaces.workspace(containing: paneID),
+              var pane = ws.panes.first(where: { $0.id == paneID }), pane.isAwaitingRole else { return }
+        pane.awaitingRole = nil
+        if let role {
+            // Com este, 2+ devs no workspace: o novo dev ganha worktree. Os que já existem não mudam.
+            let devs = ws.panes.filter { $0.id != paneID && $0.role?.isDev == true }.count + (role.isDev ? 1 : 0)
+            assign(TeamSlot(role: role), to: &pane, isolate: devs >= 2, projectDir: ws.directory)
+            var draft = ws
+            if let i = draft.panes.firstIndex(where: { $0.id == paneID }) { draft.panes[i] = pane }
+            pane.systemPrompt = TeamPrompt.build(for: pane, team: Self.team(of: draft), projectDir: ws.directory)
+        }
+        let updated = pane
+        workspaces.updatePane(paneID) { $0 = updated }
+        launch(updated, prompt: nil)
+        if focusedPane == paneID { focusViewOfFocusedPane() }
+    }
+
     func closeWorkspace(_ id: UUID) {
         guard let ws = workspaces.workspaces.first(where: { $0.id == id }) else { return }
-        let running = ws.panes.filter { terminals[$0.id]?.status != .exited && $0.kind == .claude }
+        let running = ws.panes.filter { $0.kind == .claude && !$0.isAwaitingRole && terminals[$0.id]?.status != .exited }
         if !running.isEmpty {
             let alert = NSAlert()
             alert.messageText = "Fechar o workspace “\(ws.name)”?"
@@ -202,7 +232,7 @@ final class Cockpit: ObservableObject {
 
     @discardableResult
     func addPane(kind: PaneSpec.Kind, accountID: UUID?, in workspaceID: UUID? = nil,
-                 prompt: String? = nil, focus: Bool = true) -> PaneSpec? {
+                 prompt: String? = nil, focus: Bool = true, askRole: Bool = false) -> PaneSpec? {
         guard let accountID = accountID ?? accounts.accounts.first?.id,
               let wsID = workspaceID ?? workspaces.selectedID,
               let ws = workspaces.workspaces.first(where: { $0.id == wsID }) else { return nil }
@@ -216,9 +246,11 @@ final class Cockpit: ObservableObject {
             return existing.1
         }
 
-        let pane = PaneSpec(kind: kind, name: ws.nextPaneName(), accountID: accountID, directory: ws.directory)
+        var pane = PaneSpec(kind: kind, name: ws.nextPaneName(), accountID: accountID, directory: ws.directory)
+        // Com askRole, o painel aparece em "escolher papel" e o claude só inicia em chooseRole.
+        if kind == .claude, askRole { pane.awaitingRole = true }
         workspaces.update(wsID) { $0.panes.append(pane) }
-        if kind == .claude { launch(pane, prompt: prompt) }
+        if kind == .claude, !pane.isAwaitingRole { launch(pane, prompt: prompt) }
         if focus {
             if workspaces.selectedID != wsID { workspaces.selectedID = wsID }
             zoomed = false
@@ -445,6 +477,7 @@ final class Cockpit: ObservableObject {
                 return .fail("Painel “\(wanted)” não existe. Use list_panes.")
             }
             guard pane.id != caller else { return .fail("Esse é o seu próprio painel.") }
+            if pane.isAwaitingRole { return .fail("\(pane.name) ainda está escolhendo papel.") }
             guard pane.kind == .claude, let term = terminals[pane.id] else {
                 return .fail("\(pane.name) não é um Claude Code.")
             }
@@ -455,7 +488,8 @@ final class Cockpit: ObservableObject {
         case "list_panes":
             let lines = ws.panes.map { pane -> String in
                 let account = accounts.account(pane.accountID)?.name ?? "?"
-                let status = pane.kind == .web ? "claude.ai" : (terminals[pane.id]?.status.label ?? "?")
+                let status = pane.kind == .web ? "claude.ai"
+                    : pane.isAwaitingRole ? "escolhendo papel" : (terminals[pane.id]?.status.label ?? "?")
                 let me = pane.id == caller ? "  ← você" : ""
                 var who = pane.name
                 if let role = pane.role { who += " (\(role.short))" }
