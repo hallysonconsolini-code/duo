@@ -2,13 +2,20 @@ import SwiftUI
 import AppKit
 import UserNotifications
 
-/// Preferências do aviso de "painel terminou" (UserDefaults, as mesmas chaves do @AppStorage dos Ajustes).
+/// Preferências dos avisos (UserDefaults, as mesmas chaves do @AppStorage dos Ajustes).
 enum NoticePrefs {
+    /// Aviso no app a cada painel que termina.
     static let enabledKey = "notifyOnFinish"
+    /// Notificação do macOS, com o Duo em segundo plano, quando a equipe de um workspace termina.
     static let backgroundKey = "notifyInBackground"
+    /// Som baixo quando a equipe de um workspace termina.
+    static let soundKey = "soundOnTeamDone"
 
-    static var enabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
-    static var background: Bool { UserDefaults.standard.object(forKey: backgroundKey) as? Bool ?? true }
+    static var enabled: Bool { flag(enabledKey) }
+    static var background: Bool { flag(backgroundKey) }
+    static var sound: Bool { flag(soundKey) }
+
+    private static func flag(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 }
 
 /// Um aviso pequeno no canto da área de conteúdo.
@@ -66,6 +73,25 @@ final class Notices: NSObject, ObservableObject, UNUserNotificationCenterDelegat
         onOpen?(notice.paneID)
     }
 
+    // MARK: Som
+
+    /// Som do sistema "Pop", baixo. Fica guardado: um NSSound solto para de tocar ao ser liberado.
+    private let doneSound: NSSound? = {
+        let sound = NSSound(named: "Pop")
+        sound?.volume = 0.3
+        return sound
+    }()
+    private var lastSound = Date.distantPast
+    private static let soundGap: TimeInterval = 3
+
+    /// Toca o som de "equipe terminou", no máximo um a cada 3s no app todo.
+    func playDone() {
+        guard let sound = doneSound, Date().timeIntervalSince(lastSound) >= Self.soundGap else { return }
+        lastSound = Date()
+        if sound.isPlaying { sound.stop() }
+        sound.play()
+    }
+
     // MARK: macOS
 
     /// Pede permissão uma vez (na primeira notificação ou ao ligar a opção nos Ajustes).
@@ -78,15 +104,15 @@ final class Notices: NSObject, ObservableObject, UNUserNotificationCenterDelegat
         }
     }
 
-    func postSystem(title: String, body: String, paneID: UUID) {
+    /// `key` identifica a notificação: uma nova com a mesma chave substitui a anterior.
+    func postSystem(title: String, body: String, paneID: UUID, key: String) {
         guard canUseSystem else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = nil
         content.userInfo = ["pane": paneID.uuidString]
-        // Um aviso por painel: o novo substitui o anterior do mesmo painel.
-        let request = UNNotificationRequest(identifier: "finished-\(paneID.uuidString)", content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: key, content: content, trigger: nil)
         Task { @MainActor in
             let center = UNUserNotificationCenter.current()
             switch await center.notificationSettings().authorizationStatus {

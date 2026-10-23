@@ -73,6 +73,8 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         view.caretColor = NSColor(hex: "#EF4444")
         view.optionAsMetaKey = false
         view.optionAsMetaKeyForFunctionalKeys = true
+        // O Claude Code manda BEL ao terminar; o Duo tem o próprio som (equipe terminou).
+        view.bellStyle = .none
         return view
     }
 

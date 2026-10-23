@@ -12,27 +12,29 @@ struct SettingsView: View {
     }
 }
 
-/// Aviso quando um painel termina a tarefa.
+/// Avisos de painel e de equipe terminando.
 private struct NoticeSettings: View {
     @EnvironmentObject var cockpit: Cockpit
     @AppStorage(NoticePrefs.enabledKey) private var enabled = true
+    @AppStorage(NoticePrefs.soundKey) private var sound = true
     @AppStorage(NoticePrefs.backgroundKey) private var background = true
 
+    private static let teamRule = "quando o gerente encerra o turno ou, sem gerente, quando todos os painéis param"
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             DuoToggle(isOn: $enabled, title: "Avisar quando um painel terminar",
-                      detail: "Um aviso discreto no canto da janela quando um Claude termina a tarefa. Sem som.")
-            DuoToggle(isOn: $background, title: "Também com o Duo em segundo plano",
-                      detail: "Notificação do macOS, sem som. Clicar nela volta para o painel.")
-                .disabled(!enabled)
-                .padding(.leading, 20)
+                      detail: "Um aviso discreto no canto da janela a cada painel que termina. Sem som.")
+            DuoToggle(isOn: $sound, title: "Som quando a equipe terminar",
+                      detail: "Um som baixo \(Self.teamRule). Toca mesmo com o Duo na frente.")
+            DuoToggle(isOn: $background, title: "Notificação do macOS quando a equipe terminar",
+                      detail: "Com o Duo em segundo plano, uma notificação sem som \(Self.teamRule). Clicar nela volta para o painel.")
             Spacer(minLength: 0)
         }
         .padding(24)
         .frame(width: 640, height: 400, alignment: .topLeading)
         .background(Theme.bg)
-        .onChange(of: background) { _, on in if on && enabled { cockpit.notices.requestAuthorization() } }
-        .onChange(of: enabled) { _, on in if on && background { cockpit.notices.requestAuthorization() } }
+        .onChange(of: background) { _, on in if on { cockpit.notices.requestAuthorization() } }
     }
 }
 

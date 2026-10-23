@@ -399,6 +399,7 @@ final class Cockpit: ObservableObject {
             resumeWaiters(pane)
             if let since = workingSince.removeValue(forKey: pane), Date().timeIntervalSince(since) >= Self.minWorkForNotice {
                 notifyFinished(pane)
+                if isTeamDone(after: pane) { teamFinished(lastPane: pane) }
             }
         case "Notification":
             // O aviso de "esperando sua mensagem" chega com o painel já parado; só permissões contam.
@@ -415,26 +416,46 @@ final class Cockpit: ObservableObject {
 
     // MARK: Aviso de "terminou"
 
-    /// Avisa que um painel terminou: no app, ou com notificação do macOS se o Duo está em segundo plano.
-    /// Não avisa sobre o painel em foco com o app ativo (o usuário já está vendo).
+    /// Aviso no app de que um painel terminou. Não avisa sobre o painel em foco com o app ativo
+    /// (o usuário já está vendo).
     private func notifyFinished(_ paneID: UUID) {
         guard NoticePrefs.enabled,
               let pane = workspaces.pane(paneID), let ws = workspaces.workspace(containing: paneID) else { return }
-        let active = NSApp.isActive
         let visible = teamSetup == nil && workspaces.selectedID == ws.id && focusedPane == paneID
-        if active && visible { return }
+        if NSApp.isActive && visible { return }
 
         let role = pane.role.map(roles.role)
         let account = accounts.account(pane.accountID)
-        if !active && NoticePrefs.background {
-            let detail = [role?.short ?? account?.name, ws.name].compactMap { $0 }.joined(separator: " · ")
-            notices.postSystem(title: "\(pane.name) terminou", body: detail, paneID: paneID)
-            return
-        }
         notices.show(Notice(paneID: paneID, paneName: pane.name,
                             detail: role?.short ?? "",
                             colorHex: role?.colorHex ?? account?.colorHex ?? "#B6B7C0",
                             workspaceName: workspaces.selectedID == ws.id ? nil : ws.name))
+    }
+
+    /// A equipe do workspace terminou depois do Stop deste painel?
+    /// - Com gerente: quando o turno de um gerente termina. Um dev terminando enquanto o gerente
+    ///   espera (wait_for_pane) não conta.
+    /// - Sem gerente: quando nenhum painel fica trabalhando nem esperando permissão.
+    private func isTeamDone(after paneID: UUID) -> Bool {
+        guard let ws = workspaces.workspace(containing: paneID) else { return false }
+        if ws.panes.contains(where: { $0.role == .manager }) {
+            return ws.panes.first { $0.id == paneID }?.role == .manager
+        }
+        return !ws.panes.contains { pane in
+            guard let status = terminals[pane.id]?.status else { return false }
+            return status == .working || status == .attention
+        }
+    }
+
+    /// Som baixo (mesmo com o app ativo e o painel em foco) e, com o Duo em segundo plano,
+    /// uma notificação do macOS por workspace.
+    private func teamFinished(lastPane paneID: UUID) {
+        guard let ws = workspaces.workspace(containing: paneID), let pane = workspaces.pane(paneID) else { return }
+        if NoticePrefs.sound { notices.playDone() }
+        if !NSApp.isActive && NoticePrefs.background {
+            let who = pane.role == .manager ? "\(pane.name) (gerente) encerrou o turno" : "todos os painéis pararam"
+            notices.postSystem(title: "\(ws.name) terminou", body: who, paneID: paneID, key: "team-done-\(ws.id.uuidString)")
+        }
     }
 
     /// Vai até um painel: troca de workspace se precisar e foca.
