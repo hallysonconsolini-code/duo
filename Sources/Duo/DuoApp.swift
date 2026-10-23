@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        InputSelection.install()
         Snapshot.scheduleIfRequested()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             Self.updater?.check(interactive: false)

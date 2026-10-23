@@ -15,6 +15,13 @@ enum PaneStatus {
     }
 }
 
+/// Terminal do painel. A janela do Duo é arrastável pelo fundo (titlebar oculta), e
+/// por padrão o AppKit rouba o clique-e-arraste dentro do terminal para mover a
+/// janela, o que impede selecionar texto com o mouse.
+final class PaneTerminalView: LocalProcessTerminalView {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
+
 /// Endereço do servidor local que os painéis usam para MCP e hooks.
 struct BridgeInfo {
     let port: UInt16
@@ -54,7 +61,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     }
 
     private static func makeView() -> LocalProcessTerminalView {
-        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let view = PaneTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.font = NSFont(name: "SF Mono", size: 12)
             ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         view.nativeBackgroundColor = Theme.nsBg
