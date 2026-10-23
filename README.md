@@ -42,7 +42,15 @@ Requer macOS 14+ e as Command Line Tools (Xcode não é necessário).
 ```bash
 ./scripts/install.sh     # compila e instala/atualiza em /Applications (fecha e reabre o Duo)
 ./scripts/make-dmg.sh    # gera build/Duo-<versão>.dmg para instalar em outro Mac
+./scripts/release.sh 0.3.0 "o que mudou"   # publica uma versão no GitHub
 ```
+
+## Atualizações
+
+O menu **Duo › Procurar atualizações…** (e uma checagem automática ao abrir) compara a versão
+instalada com a última release do GitHub. Como o repositório é privado, o app usa o `gh`
+logado no Mac (`brew install gh && gh auth login`). Se houver versão nova, aparece um aviso
+no topo; ao atualizar, o app baixa o DMG, se substitui e reabre.
 
 ## Como funciona
 

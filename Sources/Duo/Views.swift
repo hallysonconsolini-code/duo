@@ -42,11 +42,20 @@ struct CockpitView: View {
 
 private struct TitleBar: View {
     @EnvironmentObject var cockpit: Cockpit
+    @EnvironmentObject var updater: Updater
 
     var body: some View {
         HStack(spacing: 8) {
             Text("Duo").font(Theme.mono(12, .semibold)).foregroundStyle(Theme.text)
-            Text("0.2.0").font(Theme.mono(11)).foregroundStyle(Theme.dim)
+            Text(Updater.currentVersion).font(Theme.mono(11)).foregroundStyle(Theme.dim)
+            if let release = updater.available {
+                Button { updater.promptToUpdate(release) } label: {
+                    Chip(text: "↑ \(release.version) disponível", color: Theme.accent, size: 10)
+                }
+                .buttonStyle(.plain)
+                .disabled(updater.isBusy)
+                .help("Atualizar o Duo")
+            }
             Spacer()
             HStack(spacing: 14) {
                 hint("⌘T", "novo painel")
