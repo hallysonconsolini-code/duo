@@ -16,8 +16,8 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     /// Sessão do Claude Code, para retomar a conversa quando o app reabrir.
     var claudeSessionID: String?
     var claudeTranscriptPath: String?
-    /// Papel na equipe, quando o painel foi aberto por um template.
-    var role: TeamRole?
+    /// Papel na equipe (id em RoleStore). Gravado como texto, igual ao antigo enum TeamRole.
+    var role: RoleID?
     /// Alias passado em `--model` (opus, sonnet...). nil = padrão da conta.
     var model: String?
     /// Valor passado em `--effort`. nil = padrão da conta.

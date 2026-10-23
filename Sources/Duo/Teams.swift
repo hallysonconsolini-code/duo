@@ -1,60 +1,7 @@
 import Foundation
 import SwiftUI
 
-// MARK: Papéis, modelos e esforço
-
-enum TeamRole: String, Codable, CaseIterable, Identifiable {
-    case manager, seniorDev, juniorDev, designer, qa
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .manager: "Gerente"
-        case .seniorDev: "Dev sênior"
-        case .juniorDev: "Dev júnior"
-        case .designer: "Designer"
-        case .qa: "QA"
-        }
-    }
-
-    var short: String {
-        switch self {
-        case .manager: "gerente"
-        case .seniorDev: "dev sênior"
-        case .juniorDev: "dev júnior"
-        case .designer: "designer"
-        case .qa: "qa"
-        }
-    }
-
-    var defaultModel: AIModel {
-        switch self {
-        case .manager, .seniorDev, .designer: .opus
-        case .juniorDev, .qa: .sonnet
-        }
-    }
-
-    var defaultEffort: Effort {
-        switch self {
-        case .manager, .seniorDev: .high
-        case .juniorDev, .designer: .medium
-        case .qa: .low
-        }
-    }
-
-    var isDev: Bool { self == .seniorDev || self == .juniorDev }
-
-    var color: Color {
-        switch self {
-        case .manager: Theme.accentSoft
-        case .seniorDev: Theme.green
-        case .juniorDev: Color(hex: "#86EFAC")
-        case .designer: Color(hex: "#F472B6")
-        case .qa: Theme.yellow
-        }
-    }
-}
+// MARK: Modelos e esforço
 
 /// Valor passado em `claude --model` (alias, sempre aponta para a versão mais nova).
 enum AIModel: String, Codable, CaseIterable, Identifiable {
@@ -81,17 +28,22 @@ enum Effort: String, Codable, CaseIterable, Identifiable {
 /// Um membro da equipe antes de virar painel.
 struct TeamSlot: Codable, Identifiable, Equatable {
     var id = UUID()
-    var role: TeamRole
+    var role: RoleID
     var model: AIModel
     var effort: Effort
     /// Não vai para o template salvo: a conta vem da última escolha para o papel.
     var accountID: UUID?
 
-    init(role: TeamRole, model: AIModel? = nil, effort: Effort? = nil, accountID: UUID? = nil) {
+    init(role: RoleID, model: AIModel, effort: Effort, accountID: UUID? = nil) {
         self.role = role
-        self.model = model ?? role.defaultModel
-        self.effort = effort ?? role.defaultEffort
+        self.model = model
+        self.effort = effort
         self.accountID = accountID
+    }
+
+    /// Membro com o modelo e o esforço padrão do papel.
+    init(role: Role, accountID: UUID? = nil) {
+        self.init(role: role.id, model: role.defaultModel, effort: role.defaultEffort, accountID: accountID)
     }
 }
 
@@ -103,27 +55,19 @@ struct TeamTemplate: Codable, Identifiable, Equatable {
     static let standard = TeamTemplate(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000D001")!,
         name: "Equipe padrão",
-        slots: [.init(role: .manager), .init(role: .seniorDev), .init(role: .juniorDev)]
+        slots: [.init(role: Role.manager), .init(role: Role.seniorDev), .init(role: Role.juniorDev)]
     )
 
     static let large = TeamTemplate(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000D002")!,
         name: "Equipe grande",
         slots: [
-            .init(role: .manager), .init(role: .seniorDev), .init(role: .juniorDev),
-            .init(role: .juniorDev), .init(role: .designer), .init(role: .qa),
+            .init(role: Role.manager), .init(role: Role.seniorDev), .init(role: Role.juniorDev),
+            .init(role: Role.juniorDev), .init(role: Role.designer), .init(role: Role.qa),
         ]
     )
 
     static let builtIn = [standard, large]
-
-    var summary: String {
-        TeamRole.allCases.compactMap { role in
-            let n = slots.filter { $0.role == role }.count
-            return n == 0 ? nil : (n == 1 ? role.short : "\(n) \(role.short)")
-        }
-        .joined(separator: " · ")
-    }
 }
 
 @MainActor
@@ -160,7 +104,7 @@ final class TeamStore: ObservableObject {
     }
 
     /// Última conta escolhida para cada papel.
-    func lastAccount(for role: TeamRole) -> UUID? {
+    func lastAccount(for role: RoleID) -> UUID? {
         let map = UserDefaults.standard.dictionary(forKey: Self.accountsKey) as? [String: String] ?? [:]
         return map[role.rawValue].flatMap(UUID.init)
     }
@@ -256,14 +200,23 @@ enum Worktrees {
 // MARK: Instruções de cada papel
 
 /// Texto passado em `--append-system-prompt`: fica fixo mesmo depois de /clear ou compactação.
+///
+/// Partes: comum a todos (projeto, equipe, comunicação, list_panes) + de quem recebe tarefas
+/// (quem não é gerente) + `instructions` do papel (editável) + linhas automáticas que dependem
+/// da equipe (distribuição do gerente, worktree/branch de quem edita código).
 enum TeamPrompt {
-    static func build(for me: PaneSpec, team: [PaneSpec], projectDir: String) -> String? {
-        guard let role = me.role else { return nil }
+    @MainActor
+    static func build(for me: PaneSpec, team: [PaneSpec], projectDir: String, roles: RoleStore) -> String? {
+        guard let myRoleID = me.role else { return nil }
+        let myRole = roles.role(myRoleID)
         let home = NSHomeDirectory()
         func path(_ p: String) -> String { p.replacingOccurrences(of: home, with: "~") }
+        func role(of pane: PaneSpec) -> Role? { pane.role.map(roles.role) }
 
         let roster = team.map { pane -> String in
-            var line = "- \(pane.name): \(pane.role?.short ?? "claude")"
+            let r = role(of: pane)
+            var line = "- \(pane.name): \(r?.short ?? "claude")"
+            if let r, !r.isBuiltIn, !r.blurb.isEmpty { line += " — \(r.blurb)" }
             if let model = pane.model { line += " (\(model))" }
             if let branch = pane.branch { line += " · pasta \(path(pane.directory)) · branch \(branch)" }
             if pane.id == me.id { line += "  ← você" }
@@ -271,12 +224,12 @@ enum TeamPrompt {
         }
         .joined(separator: "\n")
 
-        let managers = team.filter { $0.role == .manager }
-        let lead = managers.first
+        let lead = team.first { $0.role == .manager }
         let boss = lead.map { "o gerente (\($0.name))" } ?? "o usuário"
-        let has: (TeamRole) -> Bool = { r in team.contains { $0.role == r } }
-        let names: (TeamRole) -> String = { r in team.filter { $0.role == r }.map(\.name).joined(separator: ", ") }
+        let has: (RoleID) -> Bool = { r in team.contains { $0.role == r } }
+        let names: (RoleID) -> String = { r in team.filter { $0.role == r }.map(\.name).joined(separator: ", ") }
         let usesWorktrees = team.contains { $0.branch != nil }
+        let coders = team.filter { role(of: $0)?.editsCode == true }
 
         var text = """
         # Equipe Duo
@@ -291,15 +244,19 @@ enum TeamPrompt {
         Quando um colega te passa uma tarefa, ele lê a sua resposta final com wait_for_pane: não precisa mandar \
         mensagem de volta, apenas termine com um resumo objetivo.
 
+        ## Seu papel: \(myRole.title)\(myRole.blurb.isEmpty ? "" : " — \(myRole.blurb)")
+
         """
 
-        switch role {
-        case .manager:
-            var lines = [
-                "Você é o GERENTE\(me.id == lead?.id ? "" : " (gerente principal: \(lead?.name ?? "-"))"). O usuário conversa com você.",
-                "- Não escreva nem edite código. Leia, planeje, distribua e revise.",
-                "- Quebre o pedido em tarefas pequenas, cada uma com critério de pronto claro.",
-            ]
+        var lines: [String] = []
+        if myRoleID != .manager {
+            lines.append("Tarefas chegam de \(boss). Se algo estiver ambíguo, pergunte a \(boss) e pare\(lead == nil ? "" : " (send_to_pane)").")
+        }
+        let base = myRole.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !base.isEmpty { lines.append(base) }
+
+        if myRoleID == .manager {
+            if me.id != lead?.id, let lead { lines.append("- Gerente principal: \(lead.name).") }
             if has(.seniorDev) && has(.juniorDev) {
                 lines.append("- Distribua por dificuldade: tarefas complexas (arquitetura, bugs difíceis, partes críticas) para o dev sênior (\(names(.seniorDev))); tarefas simples e mecânicas para o dev júnior (\(names(.juniorDev))). Isso economiza uso.")
             } else if has(.seniorDev) || has(.juniorDev) {
@@ -311,45 +268,31 @@ enum TeamPrompt {
             if has(.qa) {
                 lines.append("- Depois de cada entrega, peça ao QA (\(names(.qa))) para testar, indicando a pasta/branch. Bugs voltam para o dev responsável.")
             }
-            lines.append("- Tarefas independentes podem ir para devs diferentes ao mesmo tempo: mande todas com send_to_pane e depois espere cada um com wait_for_pane.")
+            let others = team.compactMap { pane -> String? in
+                guard let r = role(of: pane), !r.isBuiltIn else { return nil }
+                var item = "\(pane.name) (\(r.title)"
+                if !r.blurb.isEmpty { item += ": \(r.blurb)" }
+                if r.editsCode { item += "; edita código" }
+                return item + ")"
+            }
+            if !others.isEmpty {
+                lines.append("- Outros papéis na equipe, delegue o que for da área deles: \(others.joined(separator: ", ")).")
+            }
             if usesWorktrees {
                 lines.append("- Cada dev trabalha na própria cópia do repositório (git worktree) e faz commit na própria branch. Revise com git -C <pasta do dev> diff/log. Quando aprovado, junte com git merge da branch do dev na pasta do projeto (você pode rodar git, só não escreve código). Em conflito, peça ao dev para atualizar a branch dele (git merge do branch principal) e resolver.")
             }
-            lines.append("- Se um colega ficar esperando permissão do usuário, avise o usuário.")
-            lines.append("- No fim, entregue ao usuário um resumo: o que foi feito, por quem, o que ficou pendente.")
-            text += lines.joined(separator: "\n")
+        }
 
-        case .seniorDev, .juniorDev:
-            var lines = [
-                "Você é \(role == .seniorDev ? "DEV SÊNIOR" : "DEV JÚNIOR"). Tarefas chegam de \(boss).",
-                "- Faça só o que foi pedido. Se algo estiver ambíguo, pergunte a \(boss) e pare\(lead == nil ? "" : " (send_to_pane)").",
-            ]
+        if myRole.editsCode {
             if let branch = me.branch {
                 lines.append("- Você trabalha na sua cópia isolada do repositório (git worktree) em \(path(me.directory)), branch \(branch). Edite só arquivos dentro dela.")
                 lines.append("- Ao terminar cada tarefa, faça commit na sua branch com uma mensagem clara.")
-            } else if team.filter({ $0.role?.isDev == true }).count > 1 {
+            } else if coders.count > 1 {
                 lines.append("- Outros devs editam a mesma pasta: mexa só nos arquivos da sua tarefa.")
             }
-            lines.append("- Rode build e testes do que mudou, quando existirem.")
-            lines.append("- Termine com: arquivos alterados, o que foi feito, se build/testes passaram, dúvidas ou riscos.")
-            text += lines.joined(separator: "\n")
-
-        case .designer:
-            text += """
-            Você é o DESIGNER. Tarefas chegam de \(boss).
-            - Use as ferramentas do Figma (servidor MCP do Figma) para criar e ler telas. Se não estiverem disponíveis, avise.
-            - Não edite código do projeto.
-            - Entregue specs que um dev consiga implementar: layout, componentes, espaçamentos, cores/tokens, estados (vazio, carregando, erro) e o link do frame.
-            """
-
-        case .qa:
-            text += """
-            Você é o QA. Tarefas chegam de \(boss).
-            - Não edite código de produção.
-            - Teste o que for pedido na pasta/branch indicada: build, testes automatizados, lint e o comportamento descrito.
-            - Responda: passou ou falhou; para cada bug, passos para reproduzir, resultado esperado x obtido e arquivo:linha provável.
-            """
         }
+
+        text += lines.joined(separator: "\n")
         return text
     }
 }
