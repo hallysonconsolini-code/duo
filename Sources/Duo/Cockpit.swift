@@ -19,6 +19,12 @@ final class Cockpit: ObservableObject {
     private(set) var terminals: [UUID: TerminalSession] = [:]
     private var webs: [UUID: WebPane] = [:]
     private var waiters: [UUID: [Waiter]] = [:]
+    /// Avisos de "painel terminou".
+    let notices = Notices()
+    /// Desde quando cada painel está trabalhando (para avisar só depois de trabalho real).
+    private var workingSince: [UUID: Date] = [:]
+    /// Tempo mínimo de trabalho para avisar quando o painel termina.
+    private static let minWorkForNotice: TimeInterval = 5
     private var bridge: Bridge!
     private var mouseMonitor: Any?
 
@@ -34,6 +40,7 @@ final class Cockpit: ObservableObject {
         } catch {
             NSLog("Duo: ponte não iniciou: \(error)")
         }
+        notices.onOpen = { [weak self] id in self?.reveal(id) }
         // Clicar dentro de um painel o coloca em foco.
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             self?.focusPane(at: event)
@@ -381,23 +388,62 @@ final class Cockpit: ObservableObject {
         switch event {
         case "SessionStart":
             term.status = .idle
+            workingSince[pane] = nil
         case "UserPromptSubmit", "PreToolUse":
             term.status = .working
+            if workingSince[pane] == nil { workingSince[pane] = Date() }
         case "Stop":
             term.status = .idle
             term.refreshActualModel()
             term.injectedSinceStop = false
             resumeWaiters(pane)
+            if let since = workingSince.removeValue(forKey: pane), Date().timeIntervalSince(since) >= Self.minWorkForNotice {
+                notifyFinished(pane)
+            }
         case "Notification":
             // O aviso de "esperando sua mensagem" chega com o painel já parado; só permissões contam.
             let message = (json["message"] as? String ?? "").lowercased()
             if !message.contains("waiting for your input") { term.status = .attention }
         case "SessionEnd":
             term.status = .exited
+            workingSince[pane] = nil
             resumeWaiters(pane)
         default:
             break
         }
+    }
+
+    // MARK: Aviso de "terminou"
+
+    /// Avisa que um painel terminou: no app, ou com notificação do macOS se o Duo está em segundo plano.
+    /// Não avisa sobre o painel em foco com o app ativo (o usuário já está vendo).
+    private func notifyFinished(_ paneID: UUID) {
+        guard NoticePrefs.enabled,
+              let pane = workspaces.pane(paneID), let ws = workspaces.workspace(containing: paneID) else { return }
+        let active = NSApp.isActive
+        let visible = teamSetup == nil && workspaces.selectedID == ws.id && focusedPane == paneID
+        if active && visible { return }
+
+        let role = pane.role.map(roles.role)
+        let account = accounts.account(pane.accountID)
+        if !active && NoticePrefs.background {
+            let detail = [role?.short ?? account?.name, ws.name].compactMap { $0 }.joined(separator: " · ")
+            notices.postSystem(title: "\(pane.name) terminou", body: detail, paneID: paneID)
+            return
+        }
+        notices.show(Notice(paneID: paneID, paneName: pane.name,
+                            detail: role?.short ?? "",
+                            colorHex: role?.colorHex ?? account?.colorHex ?? "#B6B7C0",
+                            workspaceName: workspaces.selectedID == ws.id ? nil : ws.name))
+    }
+
+    /// Vai até um painel: troca de workspace se precisar e foca.
+    func reveal(_ paneID: UUID) {
+        guard let ws = workspaces.workspace(containing: paneID) else { return }
+        if workspaces.selectedID != ws.id || teamSetup != nil { selectWorkspace(ws.id) }
+        if zoomed && focusedPane != paneID { zoomed = false }
+        focusedPane = paneID
+        focusViewOfFocusedPane()
     }
 
     private final class Waiter {

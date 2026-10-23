@@ -15,6 +15,7 @@ struct CockpitView: View {
                 Rectangle().fill(Theme.bar).frame(width: 1)
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .bottomTrailing) { NoticeStack(notices: cockpit.notices) }
             }
         }
         .frame(minWidth: 900, minHeight: 560)

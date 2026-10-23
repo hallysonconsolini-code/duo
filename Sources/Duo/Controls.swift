@@ -321,3 +321,47 @@ extension SectionHeader where Trailing == EmptyView {
         self.init(title: title, subtitle: subtitle) { EmptyView() }
     }
 }
+
+// MARK: Interruptor
+
+/// Liga/desliga no visual do Duo: título, explicação e um interruptor vermelho quando ligado.
+struct DuoToggle: View {
+    @Binding var isOn: Bool
+    let title: String
+    var detail: String?
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hover = false
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack(alignment: isOn ? .trailing : .leading) {
+                    Capsule()
+                        .fill(isOn ? Theme.accent.opacity(isEnabled ? 0.9 : 0.3) : Theme.bar)
+                        .overlay(Capsule().strokeBorder(isOn ? .clear : (hover ? Theme.dim.opacity(0.6) : Theme.paneBorder), lineWidth: 1))
+                    Circle()
+                        .fill(isEnabled ? Theme.text : Theme.dim)
+                        .padding(2)
+                }
+                .frame(width: 28, height: 16)
+                .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(Theme.mono(11.5, .bold))
+                        .foregroundStyle(isEnabled ? Theme.text : Theme.faint)
+                    if let detail {
+                        Text(detail)
+                            .font(Theme.mono(10))
+                            .foregroundStyle(isEnabled ? Theme.dim : Theme.faint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.15), value: isOn)
+    }
+}

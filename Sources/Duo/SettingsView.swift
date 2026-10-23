@@ -2,6 +2,41 @@ import SwiftUI
 import AppKit
 
 struct SettingsView: View {
+    var body: some View {
+        TabView {
+            AccountsSettings()
+                .tabItem { Label("Contas", systemImage: "person.2") }
+            NoticeSettings()
+                .tabItem { Label("Avisos", systemImage: "bell") }
+        }
+    }
+}
+
+/// Aviso quando um painel termina a tarefa.
+private struct NoticeSettings: View {
+    @EnvironmentObject var cockpit: Cockpit
+    @AppStorage(NoticePrefs.enabledKey) private var enabled = true
+    @AppStorage(NoticePrefs.backgroundKey) private var background = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            DuoToggle(isOn: $enabled, title: "Avisar quando um painel terminar",
+                      detail: "Um aviso discreto no canto da janela quando um Claude termina a tarefa. Sem som.")
+            DuoToggle(isOn: $background, title: "Também com o Duo em segundo plano",
+                      detail: "Notificação do macOS, sem som. Clicar nela volta para o painel.")
+                .disabled(!enabled)
+                .padding(.leading, 20)
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(width: 640, height: 400, alignment: .topLeading)
+        .background(Theme.bg)
+        .onChange(of: background) { _, on in if on && enabled { cockpit.notices.requestAuthorization() } }
+        .onChange(of: enabled) { _, on in if on && background { cockpit.notices.requestAuthorization() } }
+    }
+}
+
+private struct AccountsSettings: View {
     @EnvironmentObject var store: AccountStore
     @EnvironmentObject var cockpit: Cockpit
     @State private var selection: UUID?
