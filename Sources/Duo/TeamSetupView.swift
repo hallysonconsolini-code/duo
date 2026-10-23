@@ -21,6 +21,9 @@ struct TeamSetupView: View {
     @State private var singleAccount: UUID?
     @State private var savingName: String?
     @State private var directory: String?
+    /// Papel aberto no editor (no lugar da lista de equipes); `editingNew` = ainda não existe no store.
+    @State private var editing: Role?
+    @State private var editingNew = false
     @FocusState private var nameFocused: Bool
 
     private var folderName: String? { directory.map { URL(fileURLWithPath: $0).lastPathComponent } }
@@ -33,16 +36,21 @@ struct TeamSetupView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
-                if isNew { folderSection }
-                HStack(alignment: .top, spacing: 0) {
-                    templateList
-                        .frame(width: 200)
-                    Rectangle().fill(Theme.bar).frame(width: 1)
-                    detail
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                if let role = editing {
+                    RoleEditor(role: role, isNew: editingNew) { editing = nil }
+                        .id(role.id)
+                } else {
+                    if isNew { folderSection }
+                    HStack(alignment: .top, spacing: 0) {
+                        templateList
+                            .frame(width: 200)
+                        Rectangle().fill(Theme.bar).frame(width: 1)
+                        detail
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    .frame(minHeight: 400)
+                    footer
                 }
-                .frame(minHeight: 400)
-                footer
             }
             .frame(maxWidth: 840)
             .frame(maxWidth: .infinity)
@@ -178,8 +186,10 @@ struct TeamSetupView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 10)], spacing: 10) {
             ForEach(roles.all) { role in
                 RoleCard(role: role, count: slots.filter { $0.role == role.id }.count,
-                         decrement: { removeLast(role.id) }, increment: { add(role) })
+                         decrement: { removeLast(role.id) }, increment: { add(role) },
+                         edit: { editingNew = false; editing = role })
             }
+            NewRoleCard { editingNew = true; editing = roles.draft() }
         }
     }
 
@@ -383,6 +393,8 @@ private struct RoleCard: View {
     let count: Int
     let decrement: () -> Void
     let increment: () -> Void
+    let edit: () -> Void
+    @State private var hover = false
 
     var body: some View {
         let lit = count > 0
@@ -414,6 +426,37 @@ private struct RoleCard: View {
         .frame(height: 148)
         .background(RoundedRectangle(cornerRadius: 10).fill(lit ? role.color.opacity(0.07) : Theme.bar.opacity(0.4)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(lit ? role.color.opacity(0.4) : Theme.paneBorder, lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            GlyphButton(glyph: "✎", help: "Editar papel", size: 11, action: edit)
+                .padding(4)
+                .opacity(hover ? 1 : 0)
+        }
+        .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.15), value: lit)
+    }
+}
+
+/// Último card da Composição: abre o editor com um papel novo.
+private struct NewRoleCard: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Text("+").font(Theme.mono(22, .bold))
+                Text("Novo papel").font(Theme.mono(11.5, .bold))
+            }
+            .foregroundStyle(hover ? Theme.soft : Theme.dim)
+            .frame(maxWidth: .infinity)
+            .frame(height: 148)
+            .background(RoundedRectangle(cornerRadius: 10).fill(hover ? Theme.bar.opacity(0.6) : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(hover ? Theme.dim.opacity(0.6) : Theme.paneBorder, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Criar um papel novo")
     }
 }

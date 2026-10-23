@@ -559,14 +559,22 @@ private struct RolePicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            SectionLabel(text: "Papel de \(pane.name)").padding(.horizontal, 10).padding(.bottom, 6)
-            ForEach(options.indices, id: \.self) { i in
-                row(i)
+        // Cabe: lista centrada como antes. Não cabe: a lista rola e o título e a dica ficam fixos.
+        ViewThatFits(in: .vertical) {
+            VStack(alignment: .leading, spacing: 2) {
+                title
+                rows
+                hint
             }
-            Text("↑↓ ou 1–\(min(options.count, 9)) · ↩ abre · esc fecha")
-                .font(Theme.mono(10)).foregroundStyle(Theme.faint)
-                .padding(.horizontal, 10).padding(.top, 8)
+            VStack(alignment: .leading, spacing: 2) {
+                title
+                ScrollViewReader { proxy in
+                    ScrollView { rows }
+                        .onChange(of: index) { _, i in proxy.scrollTo(i) }
+                }
+                hint
+            }
+            .padding(.vertical, 12)
         }
         .frame(width: 300)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -590,6 +598,24 @@ private struct RolePicker: View {
         }
         .onAppear { if isFocused { focused = true } }
         .onChange(of: isFocused) { _, now in if now { focused = true } }
+    }
+
+    private var title: some View {
+        SectionLabel(text: "Papel de \(pane.name)").padding(.horizontal, 10).padding(.bottom, 6)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(options.indices, id: \.self) { i in
+                row(i).id(i)
+            }
+        }
+    }
+
+    private var hint: some View {
+        Text("↑↓ ou 1–\(min(options.count, 9)) · ↩ abre · esc fecha")
+            .font(Theme.mono(10)).foregroundStyle(Theme.faint)
+            .padding(.horizontal, 10).padding(.top, 8)
     }
 
     private func row(_ i: Int) -> some View {
