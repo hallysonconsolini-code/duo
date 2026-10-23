@@ -11,6 +11,8 @@ final class Cockpit: ObservableObject {
         didSet { if focusedPane != oldValue { focusViewOfFocusedPane() } }
     }
     @Published var zoomed = false
+    /// Pasta aguardando a escolha de equipe (abre a sheet de equipe).
+    @Published var teamSetup: TeamSetupRequest?
     @Published private(set) var isReady = false
 
     private(set) var terminals: [UUID: TerminalSession] = [:]
@@ -80,7 +82,12 @@ final class Cockpit: ObservableObject {
         // todos os painéis enquanto o seletor de pasta estava aberto.
         let finish: @MainActor (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
-            self.adoptWorkspace(at: url)
+            // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
+            if let existing = self.workspaces.workspaces.first(where: { $0.directory == url.path }) {
+                self.selectWorkspace(existing.id)
+                return
+            }
+            self.teamSetup = TeamSetupRequest(directory: url.path, workspaceID: nil)
         }
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             panel.beginSheetModal(for: window) { response in MainActor.assumeIsolated { finish(response) } }
@@ -89,18 +96,64 @@ final class Cockpit: ObservableObject {
         }
     }
 
-    private func adoptWorkspace(at url: URL) {
-        // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
-        if let existing = workspaces.workspaces.first(where: { $0.directory == url.path }) {
-            selectWorkspace(existing.id)
-            return
+    /// Abre a escolha de equipe para o workspace atual (adiciona painéis a ele).
+    func setUpTeamInSelectedWorkspace() {
+        guard let ws = workspaces.selected else { return }
+        teamSetup = TeamSetupRequest(directory: ws.directory, workspaceID: ws.id)
+    }
+
+    /// Conclui a sheet de equipe. `slots` vazio = um painel só, sem papel.
+    func finishTeamSetup(_ request: TeamSetupRequest, slots: [TeamSlot], singleAccount: UUID?) {
+        teamSetup = nil
+        let wsID: UUID
+        if let existing = request.workspaceID, workspaces.workspaces.contains(where: { $0.id == existing }) {
+            wsID = existing
+        } else if let existing = workspaces.workspaces.first(where: { $0.directory == request.directory }) {
+            wsID = existing.id
+        } else {
+            let url = URL(fileURLWithPath: request.directory)
+            let ws = Workspace(name: url.lastPathComponent, directory: request.directory)
+            workspaces.workspaces.append(ws)
+            wsID = ws.id
         }
-        let ws = Workspace(name: url.lastPathComponent, directory: url.path)
-        workspaces.workspaces.append(ws)
-        workspaces.selectedID = ws.id
-        if let first = accounts.accounts.first {
-            addPane(kind: .claude, accountID: first.id)
+        selectWorkspace(wsID)
+        if slots.isEmpty {
+            addPane(kind: .claude, accountID: singleAccount ?? accounts.accounts.first?.id, in: wsID)
+        } else {
+            createTeam(slots, in: wsID)
         }
+    }
+
+    /// Cria um painel por membro, cada um com papel, modelo, esforço e instruções.
+    /// Com 2 ou mais devs, cada dev ganha um git worktree próprio.
+    func createTeam(_ slots: [TeamSlot], in wsID: UUID) {
+        guard let ws = workspaces.workspaces.first(where: { $0.id == wsID }) else { return }
+        let devCount = slots.filter { $0.role.isDev }.count
+        var draft = ws
+        var specs: [PaneSpec] = []
+        for slot in slots {
+            guard let accountID = slot.accountID ?? accounts.accounts.first?.id else { continue }
+            let name = draft.nextPaneName()
+            var pane = PaneSpec(kind: .claude, name: name, accountID: accountID, directory: ws.directory)
+            pane.role = slot.role
+            pane.model = slot.model.rawValue
+            pane.effort = slot.effort.rawValue
+            if slot.role.isDev, devCount >= 2, let tree = Worktrees.create(for: ws.directory, paneName: name) {
+                pane.directory = tree.directory
+                pane.branch = tree.branch
+            }
+            draft.panes.append(pane)
+            specs.append(pane)
+        }
+        // A equipe inteira deste workspace (inclui membros que já estavam lá).
+        let team = draft.panes.filter { $0.kind == .claude && $0.role != nil }
+        for i in specs.indices {
+            specs[i].systemPrompt = TeamPrompt.build(for: specs[i], team: team, projectDir: ws.directory)
+        }
+        workspaces.update(wsID) { $0.panes.append(contentsOf: specs) }
+        for pane in specs { launch(pane, prompt: nil) }
+        zoomed = false
+        focusedPane = (specs.first { $0.role == .manager } ?? specs.first)?.id
     }
 
     func closeWorkspace(_ id: UUID) {
@@ -286,6 +339,7 @@ final class Cockpit: ObservableObject {
             term.status = .working
         case "Stop":
             term.status = .idle
+            term.refreshActualModel()
             term.injectedSinceStop = false
             resumeWaiters(pane)
         case "Notification":
@@ -396,7 +450,10 @@ final class Cockpit: ObservableObject {
                 let account = accounts.account(pane.accountID)?.name ?? "?"
                 let status = pane.kind == .web ? "claude.ai" : (terminals[pane.id]?.status.label ?? "?")
                 let me = pane.id == caller ? "  ← você" : ""
-                return "\(pane.name) · \(account) · \(status)\(me)"
+                var who = pane.name
+                if let role = pane.role { who += " (\(role.short))" }
+                if let model = pane.model { who += " · \(model)" }
+                return "\(who) · \(account) · \(status)\(me)"
             }
             return ("Workspace \(ws.name) (\(ws.directory))\n" + lines.joined(separator: "\n"), false)
 
@@ -536,4 +593,12 @@ enum MCPTools {
             ],
         ],
     ]
+}
+
+
+/// Uma pasta esperando a escolha de equipe. `workspaceID` = adicionar a um workspace existente.
+struct TeamSetupRequest: Identifiable {
+    let id = UUID()
+    let directory: String
+    let workspaceID: UUID?
 }

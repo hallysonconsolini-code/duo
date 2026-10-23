@@ -16,6 +16,16 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     /// Sessão do Claude Code, para retomar a conversa quando o app reabrir.
     var claudeSessionID: String?
     var claudeTranscriptPath: String?
+    /// Papel na equipe, quando o painel foi aberto por um template.
+    var role: TeamRole?
+    /// Alias passado em `--model` (opus, sonnet...). nil = padrão da conta.
+    var model: String?
+    /// Valor passado em `--effort`. nil = padrão da conta.
+    var effort: String?
+    /// Instruções do papel, passadas em `--append-system-prompt`.
+    var systemPrompt: String?
+    /// Branch do worktree do dev, quando tem cópia isolada.
+    var branch: String?
 
     /// Só dá para retomar uma sessão que já tem conversa gravada em disco.
     var resumableSessionID: String? {

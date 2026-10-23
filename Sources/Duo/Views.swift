@@ -22,6 +22,9 @@ struct CockpitView: View {
         .background(WindowChrome())
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        .sheet(item: $cockpit.teamSetup) { request in
+            TeamSetupView(request: request)
+        }
     }
 
     @ViewBuilder
@@ -240,10 +243,17 @@ private struct PaneRow: View {
             Text(pane.name)
                 .font(Theme.mono(11.5, .bold))
                 .foregroundStyle(isFocused ? Theme.accentSoft : Theme.soft)
-            Text(pane.kind == .web ? "web" : (account?.name.lowercased() ?? ""))
-                .font(Theme.mono(10))
-                .foregroundStyle(account?.color.opacity(0.85) ?? Theme.dim)
-                .lineLimit(1)
+            if let role = pane.role {
+                Text(role.short)
+                    .font(Theme.mono(10))
+                    .foregroundStyle(role.color.opacity(0.9))
+                    .lineLimit(1)
+            } else {
+                Text(pane.kind == .web ? "web" : (account?.name.lowercased() ?? ""))
+                    .font(Theme.mono(10))
+                    .foregroundStyle(account?.color.opacity(0.85) ?? Theme.dim)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 0)
             Text("\(index)")
                 .font(Theme.mono(11))
@@ -299,6 +309,30 @@ private struct TerminalStatusChip: View {
     var body: some View {
         let color = Theme.color(for: term.status)
         Chip(text: term.status.label, color: color == Theme.dim ? Theme.soft : color, bold: false, size: 10)
+    }
+}
+
+/// Modelo pedido para o painel; fica amarelo quando o Claude Code está rodando outro.
+private struct TerminalModelChip: View {
+    @ObservedObject var term: TerminalSession
+
+    var body: some View {
+        let requested = term.requestedModel ?? ""
+        if term.modelMismatch {
+            let actual = term.actualModel.map(Self.family) ?? "?"
+            Chip(text: "pediu \(requested) · rodando \(actual)", color: Theme.yellow, bold: false, size: 10)
+                .help("A conta não está usando o modelo pedido (sem acesso ou limite esgotado).")
+        } else {
+            Chip(text: requested, color: Theme.dim, bold: false, size: 10)
+        }
+    }
+
+    /// claude-sonnet-5-5 → sonnet 5.5
+    static func family(_ id: String) -> String {
+        let parts = id.split(separator: "-").dropFirst()
+        guard let name = parts.first else { return id }
+        let version = parts.dropFirst().prefix { $0.allSatisfy(\.isNumber) && $0.count <= 2 }
+        return version.isEmpty ? String(name) : "\(name) \(version.joined(separator: "."))"
     }
 }
 
@@ -401,6 +435,12 @@ private struct PaneChrome: View {
             }
             Chip(text: (account?.name ?? "?").uppercased(), color: accent)
             Chip(text: pane.name, color: Theme.soft, bold: false)
+            if let role = pane.role {
+                Chip(text: role.short, color: role.color)
+            }
+            if let term, term.requestedModel != nil {
+                TerminalModelChip(term: term)
+            }
             Text(pane.kind == .web ? "claude.ai" : folderLabel)
                 .font(Theme.mono(11))
                 .foregroundStyle(Theme.dim)
@@ -432,7 +472,8 @@ private struct PaneChrome: View {
     }
 
     private var folderLabel: String {
-        pane.directory.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        if let branch = pane.branch { return "⎇ \(branch)" }
+        return pane.directory.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
     @ViewBuilder
@@ -512,6 +553,9 @@ private struct EmptyWorkspace: View {
                           color: account.color) {
                     cockpit.addPane(kind: .claude, accountID: account.id)
                 }
+            }
+            ActionRow(keys: "⇧⌘E", label: "montar equipe…", color: Theme.accent) {
+                cockpit.setUpTeamInSelectedWorkspace()
             }
         }
         .padding(32)

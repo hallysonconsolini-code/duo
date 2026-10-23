@@ -8,6 +8,7 @@ struct DuoApp: App {
     @StateObject private var workspaces: WorkspaceStore
     @StateObject private var cockpit: Cockpit
     @StateObject private var updater: Updater
+    @StateObject private var teams = TeamStore()
 
     init() {
         let accounts = AccountStore()
@@ -34,6 +35,7 @@ struct DuoApp: App {
                 .environmentObject(workspaces)
                 .environmentObject(cockpit)
                 .environmentObject(updater)
+                .environmentObject(teams)
         }
         .defaultSize(width: 1440, height: 900)
         .windowStyle(.hiddenTitleBar)
@@ -53,6 +55,8 @@ struct DuoApp: App {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Abrir pasta como workspace…") { cockpit.openWorkspace() }
                     .keyboardShortcut("n", modifiers: .command)
+                Button("Montar equipe neste workspace…") { cockpit.setUpTeamInSelectedWorkspace() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
                 Divider()
                 Button("Fechar painel") { cockpit.closeFocusedPane() }
                     .keyboardShortcut("w", modifiers: .command)

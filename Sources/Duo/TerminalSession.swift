@@ -29,6 +29,11 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
     private let account: Account
     private let bridge: BridgeInfo
     private var initialPrompt: String?
+    /// Flags fixas do painel (modelo, esforço, papel), repetidas em cada início.
+    private let paneFlags: String
+    /// Modelo pedido (alias) e o modelo que o Claude Code realmente usou na última resposta.
+    let requestedModel: String?
+    @Published private(set) var actualModel: String?
 
     /// Recriada a cada reinício, para começar com a tela limpa.
     @Published private(set) var view: LocalProcessTerminalView
@@ -46,6 +51,12 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         self.account = account
         self.bridge = bridge
         self.initialPrompt = initialPrompt
+        self.requestedModel = pane.model
+        var flags: [String] = []
+        if let model = pane.model { flags.append("--model \(Self.quote(model))") }
+        if let effort = pane.effort { flags.append("--effort \(Self.quote(effort))") }
+        if let prompt = pane.systemPrompt { flags.append("--append-system-prompt \(Self.quote(prompt))") }
+        self.paneFlags = flags.joined(separator: " ")
         self.sessionID = pane.resumableSessionID
         self.transcriptPath = pane.claudeTranscriptPath
         self.view = Self.makeView()
@@ -121,6 +132,7 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
         if let files = try? writeLaunchFiles() {
             claude += " --mcp-config \(Self.quote(files.mcp.path)) --settings \(Self.quote(files.settings.path))"
         }
+        if !paneFlags.isEmpty { claude += " " + paneFlags }
         let script: String
         if let resume {
             // Se a sessão não existir mais, abre uma nova.
@@ -188,6 +200,28 @@ final class TerminalSession: NSObject, ObservableObject, LocalProcessTerminalVie
             .map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
         while rows.last?.isEmpty == true { rows.removeLast() }
         return rows.suffix(lines).joined(separator: "\n")
+    }
+
+    /// Atualiza `actualModel` com o modelo da última resposta gravada no transcript.
+    func refreshActualModel() {
+        guard requestedModel != nil, let transcriptPath,
+              let data = FileManager.default.contents(atPath: transcriptPath),
+              let content = String(data: data, encoding: .utf8) else { return }
+        for line in content.split(separator: "\n").reversed() {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  obj["type"] as? String == "assistant",
+                  let message = obj["message"] as? [String: Any],
+                  let model = message["model"] as? String, model.hasPrefix("claude") else { continue }
+            if actualModel != model { actualModel = model }
+            return
+        }
+    }
+
+    /// true quando o Claude Code está rodando outro modelo que não o pedido (ex.: conta sem acesso ao Opus).
+    var modelMismatch: Bool {
+        guard let requested = requestedModel?.lowercased(), let actual = actualModel?.lowercased(),
+              ["opus", "sonnet", "haiku", "fable"].contains(requested) else { return false }
+        return !actual.contains(requested)
     }
 
     /// Texto da última resposta do Claude, lido do transcript da sessão.
