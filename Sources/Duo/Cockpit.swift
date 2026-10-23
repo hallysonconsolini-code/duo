@@ -208,6 +208,9 @@ final class Cockpit: ObservableObject {
         if workspaces.selectedID == id { workspaces.selectedID = workspaces.workspaces.first?.id }
     }
 
+    /// Tela de nova equipe aberta sem workspace de destino: o workspace selecionado não é o alvo.
+    var isCreatingWorkspace: Bool { teamSetup.map { $0.workspaceID == nil } ?? false }
+
     func selectWorkspace(_ id: UUID) {
         workspaces.selectedID = id
         teamSetup = nil
