@@ -89,8 +89,9 @@ private struct WorkspaceTabs: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(workspaces.workspaces) { ws in
-                WorkspaceTab(workspace: ws, isActive: ws.id == workspaces.selectedID)
+                WorkspaceTab(workspace: ws, isActive: ws.id == workspaces.selectedID && !cockpit.isCreatingWorkspace)
             }
+            if cockpit.isCreatingWorkspace { NewTeamTab() }
             GlyphButton(glyph: "+", help: "Novo workspace (⌘N)") { cockpit.openWorkspace() }
                 .padding(.horizontal, 8)
             Spacer(minLength: 0)
@@ -110,13 +111,35 @@ private struct WorkspaceTabs: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(workspaces.selected == nil)
+                .disabled(workspaces.selected == nil || cockpit.isCreatingWorkspace)
                 .help("Novo Claude Code com \(account.name)")
                 .overlay(alignment: .leading) { Rectangle().fill(Theme.sep).frame(width: 1) }
             }
         }
         .frame(height: 34)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.accent.opacity(0.1)).frame(height: 1) }
+    }
+}
+
+/// Aba provisória enquanto a tela de nova equipe está aberta.
+private struct NewTeamTab: View {
+    @EnvironmentObject var cockpit: Cockpit
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Nova equipe")
+                .font(Theme.mono(11, .bold))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+            Button { cockpit.teamSetup = nil } label: {
+                Text("×").font(Theme.mono(11)).foregroundStyle(Theme.dim)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxHeight: .infinity)
+        .background(Theme.accent.opacity(0.06))
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.accent).frame(height: 2) }
     }
 }
 
@@ -181,7 +204,7 @@ private struct Sidebar: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .disabled(workspaces.selected == nil)
+                .disabled(workspaces.selected == nil || cockpit.isCreatingWorkspace)
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -189,8 +212,15 @@ private struct Sidebar: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    ForEach(Array((workspaces.selected?.panes ?? []).enumerated()), id: \.element.id) { index, pane in
-                        PaneRow(pane: pane, index: index + 1)
+                    if cockpit.isCreatingWorkspace {
+                        Text("A equipe aparece aqui ao abrir.")
+                            .font(Theme.mono(10)).foregroundStyle(Theme.dim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10).padding(.vertical, 10)
+                    } else {
+                        ForEach(Array((workspaces.selected?.panes ?? []).enumerated()), id: \.element.id) { index, pane in
+                            PaneRow(pane: pane, index: index + 1)
+                        }
                     }
                 }
             }
