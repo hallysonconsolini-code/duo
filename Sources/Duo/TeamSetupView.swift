@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Sheet que aparece ao abrir uma pasta: escolher um painel só, um template de equipe
-/// ou montar uma equipe, e definir conta, modelo e esforço de cada membro.
+/// Sheet de nova equipe: escolher a pasta do projeto e um painel só, um template de equipe
+/// ou uma equipe montada, com conta, modelo e esforço de cada membro. Pasta e equipe em
+/// qualquer ordem. Ao adicionar equipe a um workspace existente, a pasta é a dele.
 struct TeamSetupView: View {
     @EnvironmentObject var cockpit: Cockpit
     @EnvironmentObject var accounts: AccountStore
@@ -18,9 +19,11 @@ struct TeamSetupView: View {
     @State private var slots: [TeamSlot] = []
     @State private var singleAccount: UUID?
     @State private var savingName: String?
+    @State private var directory: String?
     @FocusState private var nameFocused: Bool
 
-    private var folderName: String { URL(fileURLWithPath: request.directory).lastPathComponent }
+    private var folderName: String? { directory.map { URL(fileURLWithPath: $0).lastPathComponent } }
+    private var isNew: Bool { request.workspaceID == nil }
     private var existingCount: Int {
         cockpit.workspaces.workspaces.first { $0.id == request.workspaceID }?.panes.count ?? 0
     }
@@ -28,6 +31,7 @@ struct TeamSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if isNew { folderSection }
             HStack(alignment: .top, spacing: 0) {
                 templateList
                     .frame(width: 200)
@@ -37,11 +41,12 @@ struct TeamSetupView: View {
             }
             footer
         }
-        .frame(width: 760, height: 520)
+        .frame(width: 760, height: isNew ? 584 : 520)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
         .onAppear {
             singleAccount = accounts.accounts.first?.id
+            directory = request.directory
             select(choice)
         }
     }
@@ -50,13 +55,34 @@ struct TeamSetupView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text(request.workspaceID == nil ? "Nova equipe" : "Adicionar equipe")
+            Text(isNew ? "Nova equipe" : "Adicionar equipe")
                 .font(Theme.mono(13, .bold)).foregroundStyle(Theme.text)
-            Text(folderName).font(Theme.mono(11)).foregroundStyle(Theme.dim)
+            if let folderName { Text(folderName).font(Theme.mono(11)).foregroundStyle(Theme.dim) }
             Spacer()
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.bar).frame(height: 1) }
+    }
+
+    private var folderSection: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                SectionLabel(text: "Pasta do projeto")
+                if let directory, let folderName {
+                    Text(folderName).font(Theme.mono(11.5, .bold)).foregroundStyle(Theme.text)
+                    Text((directory as NSString).abbreviatingWithTildeInPath)
+                        .font(Theme.mono(10)).foregroundStyle(Theme.faint)
+                        .lineLimit(1).truncationMode(.middle)
+                } else {
+                    Text("Nenhuma pasta escolhida.").font(Theme.mono(11)).foregroundStyle(Theme.dim)
+                }
+            }
+            Spacer(minLength: 0)
+            Button(directory == nil ? "Selecionar pasta…" : "Trocar", action: chooseFolder)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 64)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.bar).frame(height: 1) }
     }
 
@@ -213,11 +239,13 @@ struct TeamSetupView: View {
             Button("Cancelar") { cockpit.teamSetup = nil }
                 .keyboardShortcut(.cancelAction)
             Button(choice == .single ? "Abrir" : "Abrir equipe (\(slots.count))") {
+                guard let directory else { return }
                 if choice != .single { teams.remember(slots) }
-                cockpit.finishTeamSetup(request, slots: choice == .single ? [] : slots, singleAccount: singleAccount)
+                cockpit.finishTeamSetup(request, directory: directory,
+                                        slots: choice == .single ? [] : slots, singleAccount: singleAccount)
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(choice != .single && slots.isEmpty)
+            .disabled(directory == nil || (choice != .single && slots.isEmpty))
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -225,6 +253,18 @@ struct TeamSetupView: View {
     }
 
     // MARK: Ações
+
+    private func chooseFolder() {
+        cockpit.chooseFolder { path in
+            // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
+            if let existing = cockpit.workspace(at: path) {
+                cockpit.teamSetup = nil
+                cockpit.selectWorkspace(existing.id)
+                return
+            }
+            directory = path
+        }
+    }
 
     private func select(_ value: Choice) {
         choice = value

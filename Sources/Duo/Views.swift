@@ -91,7 +91,7 @@ private struct WorkspaceTabs: View {
             ForEach(workspaces.workspaces) { ws in
                 WorkspaceTab(workspace: ws, isActive: ws.id == workspaces.selectedID)
             }
-            GlyphButton(glyph: "+", help: "Abrir pasta como workspace (⌘N)") { cockpit.openWorkspace() }
+            GlyphButton(glyph: "+", help: "Novo workspace (⌘N)") { cockpit.openWorkspace() }
                 .padding(.horizontal, 8)
             Spacer(minLength: 0)
             ForEach(accounts.accounts) { account in
@@ -572,7 +572,7 @@ private struct Welcome: View {
             Text("vários claude code, várias contas, um projeto.")
                 .font(Theme.mono(11)).foregroundStyle(Theme.faint)
                 .padding(.bottom, 12)
-            ActionRow(keys: "⌘N", label: "abrir pasta como workspace…", color: Theme.accent) {
+            ActionRow(keys: "⌘N", label: "novo workspace…", color: Theme.accent) {
                 cockpit.openWorkspace()
             }
         }

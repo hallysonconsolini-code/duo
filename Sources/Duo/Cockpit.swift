@@ -70,30 +70,36 @@ final class Cockpit: ObservableObject {
         terminals[pane.id] = term
     }
 
-    /// Abre uma pasta como workspace novo, já com um Claude Code.
+    /// Abre a sheet de nova equipe; a pasta do projeto é escolhida dentro dela.
     func openWorkspace() {
+        teamSetup = TeamSetupRequest(directory: nil, workspaceID: nil)
+    }
+
+    /// Seletor de pasta do projeto, como sheet sobre a janela da frente (que pode ser
+    /// a própria sheet de equipe).
+    func chooseFolder(_ done: @escaping @MainActor (String) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Abrir"
+        panel.prompt = "Escolher"
         panel.message = "Pasta do projeto"
         // Em sheet, não modal: runModal() parava o run loop principal e congelava
         // todos os painéis enquanto o seletor de pasta estava aberto.
-        let finish: @MainActor (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
-            if let existing = self.workspaces.workspaces.first(where: { $0.directory == url.path }) {
-                self.selectWorkspace(existing.id)
-                return
-            }
-            self.teamSetup = TeamSetupRequest(directory: url.path, workspaceID: nil)
+        let finish: @MainActor (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            done(url.path)
         }
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             panel.beginSheetModal(for: window) { response in MainActor.assumeIsolated { finish(response) } }
         } else {
             panel.begin { response in MainActor.assumeIsolated { finish(response) } }
         }
+    }
+
+    /// Workspace já aberto nesta pasta, se houver.
+    func workspace(at directory: String) -> Workspace? {
+        workspaces.workspaces.first { $0.directory == directory }
     }
 
     /// Abre a escolha de equipe para o workspace atual (adiciona painéis a ele).
@@ -103,16 +109,16 @@ final class Cockpit: ObservableObject {
     }
 
     /// Conclui a sheet de equipe. `slots` vazio = um painel só, sem papel.
-    func finishTeamSetup(_ request: TeamSetupRequest, slots: [TeamSlot], singleAccount: UUID?) {
+    func finishTeamSetup(_ request: TeamSetupRequest, directory: String, slots: [TeamSlot], singleAccount: UUID?) {
         teamSetup = nil
         let wsID: UUID
         if let existing = request.workspaceID, workspaces.workspaces.contains(where: { $0.id == existing }) {
             wsID = existing
-        } else if let existing = workspaces.workspaces.first(where: { $0.directory == request.directory }) {
+        } else if let existing = workspace(at: directory) {
             wsID = existing.id
         } else {
-            let url = URL(fileURLWithPath: request.directory)
-            let ws = Workspace(name: url.lastPathComponent, directory: request.directory)
+            let url = URL(fileURLWithPath: directory)
+            let ws = Workspace(name: url.lastPathComponent, directory: directory)
             workspaces.workspaces.append(ws)
             wsID = ws.id
         }
@@ -596,9 +602,10 @@ enum MCPTools {
 }
 
 
-/// Uma pasta esperando a escolha de equipe. `workspaceID` = adicionar a um workspace existente.
+/// Sheet de escolha de equipe. `directory` nil = pasta ainda não escolhida (nova equipe);
+/// `workspaceID` = adicionar a um workspace existente, com a pasta dele.
 struct TeamSetupRequest: Identifiable {
     let id = UUID()
-    let directory: String
+    let directory: String?
     let workspaceID: UUID?
 }

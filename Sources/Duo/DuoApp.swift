@@ -53,7 +53,7 @@ struct DuoApp: App {
                     cockpit.addPane(kind: .claude, accountID: cockpit.otherAccountID)
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-                Button("Abrir pasta como workspace…") { cockpit.openWorkspace() }
+                Button("Novo workspace…") { cockpit.openWorkspace() }
                     .keyboardShortcut("n", modifiers: .command)
                 Button("Montar equipe neste workspace…") { cockpit.setUpTeamInSelectedWorkspace() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
