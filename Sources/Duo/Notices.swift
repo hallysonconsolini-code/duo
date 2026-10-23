@@ -14,11 +14,14 @@ enum NoticePrefs {
     static let soundChoiceKey = "teamDoneSound"
     static let volumeKey = "teamDoneVolume"
     static let defaultVolume = 0.3
+    /// Só toca o som da equipe com o Duo em segundo plano (padrão: ligado).
+    static let soundOnlyInBackgroundKey = "teamDoneSoundOnlyInBackground"
 
     static var enabled: Bool { flag(enabledKey) }
     static var background: Bool { flag(backgroundKey) }
     static var sound: Bool { flag(soundKey) }
     static var soundChoice: String { UserDefaults.standard.string(forKey: soundChoiceKey) ?? TeamSound.defaultID }
+    static var soundOnlyInBackground: Bool { flag(soundOnlyInBackgroundKey) }
     static var volume: Double { UserDefaults.standard.object(forKey: volumeKey) as? Double ?? defaultVolume }
 
     private static func flag(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
@@ -124,6 +127,7 @@ final class Notices: NSObject, ObservableObject, UNUserNotificationCenterDelegat
 
     /// Toca o som de "equipe terminou" escolhido, no máximo um a cada 3s no app todo.
     func playDone() {
+        if NoticePrefs.soundOnlyInBackground, NSApp.isActive { return }
         guard Date().timeIntervalSince(lastSound) >= Self.soundGap else { return }
         lastSound = Date()
         play(NoticePrefs.soundChoice, volume: NoticePrefs.volume)

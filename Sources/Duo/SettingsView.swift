@@ -20,6 +20,7 @@ private struct NoticeSettings: View {
     @AppStorage(NoticePrefs.backgroundKey) private var background = true
     @AppStorage(NoticePrefs.soundChoiceKey) private var soundChoice = TeamSound.defaultID
     @AppStorage(NoticePrefs.volumeKey) private var volume = NoticePrefs.defaultVolume
+    @AppStorage(NoticePrefs.soundOnlyInBackgroundKey) private var onlyInBackground = true
 
     private var soundControls: some View {
         HStack(spacing: 12) {
@@ -58,12 +59,17 @@ private struct NoticeSettings: View {
             DuoToggle(isOn: $sound, title: "Som quando a equipe terminar",
                       detail: "Um som baixo \(Self.teamRule). Toca mesmo com o Duo na frente.")
             soundControls
+            DuoToggle(isOn: $onlyInBackground, title: "Só tocar com o Duo em segundo plano",
+                      detail: "Quando desligado, toca mesmo com o Duo na frente.")
+                .padding(.leading, 36)
+                .disabled(!sound)
+                .opacity(sound ? 1 : 0.4)
             DuoToggle(isOn: $background, title: "Notificação do macOS quando a equipe terminar",
                       detail: "Com o Duo em segundo plano, uma notificação sem som \(Self.teamRule). Clicar nela volta para o painel.")
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 640, height: 460, alignment: .topLeading)
+        .frame(width: 640, height: 520, alignment: .topLeading)
         .background(Theme.bg)
         .onChange(of: background) { _, on in if on { cockpit.notices.requestAuthorization() } }
     }
