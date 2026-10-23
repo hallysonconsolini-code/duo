@@ -74,6 +74,10 @@ struct TeamSetupView: View {
                     Text((directory as NSString).abbreviatingWithTildeInPath)
                         .font(Theme.mono(10)).foregroundStyle(Theme.faint)
                         .lineLimit(1).truncationMode(.middle)
+                    if cockpit.workspace(at: directory) != nil {
+                        Text("Já aberta como workspace. A equipe será adicionada a ele.")
+                            .font(Theme.mono(10)).foregroundStyle(Theme.dim)
+                    }
                 } else {
                     Text("Nenhuma pasta escolhida.").font(Theme.mono(11)).foregroundStyle(Theme.dim)
                 }
@@ -238,7 +242,7 @@ struct TeamSetupView: View {
             Spacer()
             Button("Cancelar") { cockpit.teamSetup = nil }
                 .keyboardShortcut(.cancelAction)
-            Button(choice == .single ? "Abrir" : "Abrir equipe (\(slots.count))") {
+            Button(confirmTitle) {
                 guard let directory else { return }
                 if choice != .single { teams.remember(slots) }
                 cockpit.finishTeamSetup(request, directory: directory,
@@ -252,16 +256,15 @@ struct TeamSetupView: View {
         .overlay(alignment: .top) { Rectangle().fill(Theme.bar).frame(height: 1) }
     }
 
+    private var confirmTitle: String {
+        let verb = directory.map { cockpit.workspace(at: $0) != nil } == true ? "Adicionar" : "Abrir"
+        return choice == .single ? verb : "\(verb) equipe (\(slots.count))"
+    }
+
     // MARK: Ações
 
     private func chooseFolder() {
         cockpit.chooseFolder { path in
-            // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
-            if let existing = cockpit.workspace(at: path) {
-                cockpit.teamSetup = nil
-                cockpit.selectWorkspace(existing.id)
-                return
-            }
             directory = path
         }
     }
