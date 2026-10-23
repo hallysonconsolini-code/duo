@@ -19,6 +19,7 @@ struct DuoApp: App {
         let updater = Updater()
         updater.onWillRelaunch = {
             AppDelegate.skipQuitConfirmation = true
+            workspaces.flushSave()
             cockpit.terminateAll()
         }
         _updater = StateObject(wrappedValue: updater)
@@ -99,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Self.cockpit?.workspaces.flushSave()
         guard !Self.skipQuitConfirmation, let cockpit = Self.cockpit, cockpit.anyRunning else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Encerrar o Duo?"

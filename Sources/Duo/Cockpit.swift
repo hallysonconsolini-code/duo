@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 
 /// Estado vivo do app: os processos de cada painel, o claude.ai de cada conta,
 /// o painel em foco e a ponte que os Claude Code usam para conversar entre si.
@@ -18,7 +17,6 @@ final class Cockpit: ObservableObject {
     private var webs: [UUID: WebPane] = [:]
     private var waiters: [UUID: [Waiter]] = [:]
     private var bridge: Bridge!
-    private var cancellables: Set<AnyCancellable> = []
     private var mouseMonitor: Any?
 
     init(accounts: AccountStore, workspaces: WorkspaceStore) {
@@ -64,9 +62,9 @@ final class Cockpit: ObservableObject {
     private func launch(_ pane: PaneSpec, prompt: String?) {
         guard let account = accounts.account(pane.accountID) else { return }
         let term = TerminalSession(pane: pane, account: account, bridge: bridge.info, initialPrompt: prompt)
-        term.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
+        // Sem reenviar o objectWillChange do terminal para o Cockpit: isso recriava a
+        // janela inteira a cada mudança de título/status de qualquer painel. As views
+        // que dependem de um terminal observam esse terminal direto.
         terminals[pane.id] = term
     }
 
@@ -78,7 +76,25 @@ final class Cockpit: ObservableObject {
         panel.canCreateDirectories = true
         panel.prompt = "Abrir"
         panel.message = "Pasta do projeto"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Em sheet, não modal: runModal() parava o run loop principal e congelava
+        // todos os painéis enquanto o seletor de pasta estava aberto.
+        let finish: @MainActor (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.adoptWorkspace(at: url)
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in MainActor.assumeIsolated { finish(response) } }
+        } else {
+            panel.begin { response in MainActor.assumeIsolated { finish(response) } }
+        }
+    }
+
+    private func adoptWorkspace(at url: URL) {
+        // A mesma pasta duas vezes só duplicaria processos: vai até o workspace existente.
+        if let existing = workspaces.workspaces.first(where: { $0.directory == url.path }) {
+            selectWorkspace(existing.id)
+            return
+        }
         let ws = Workspace(name: url.lastPathComponent, directory: url.path)
         workspaces.workspaces.append(ws)
         workspaces.selectedID = ws.id

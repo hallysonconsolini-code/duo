@@ -4,11 +4,11 @@ import SwiftTerm
 /// Terminal do painel. A janela do Duo é arrastável pelo fundo (titlebar oculta), e
 /// por padrão o AppKit rouba o clique-e-arraste dentro do terminal para mover a
 /// janela, o que impede selecionar texto com o mouse.
-final class PaneTerminalView: LocalProcessTerminalView {
+class PaneTerminalView: LocalProcessTerminalView {
     override var mouseDownCanMoveWindow: Bool { false }
 
     /// A seleção que o Cmd+A fez na caixa de prompt, para tirar as bordas da caixa
-    /// na hora de copiar.
+    /// ao copiar e para apagar o texto quando a próxima tecla pede isso.
     var promptSelection: (start: Position, end: Position)?
 
     override func copy(_ sender: Any?) {
@@ -30,12 +30,54 @@ enum InputSelection {
     static func install() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
-                  event.charactersIgnoringModifiers?.lowercased() == "a",
-                  let terminal = focusedTerminal(),
-                  terminal.selectCurrentInput()
-            else { return event }
+            guard let terminal = focusedTerminal() as? PaneTerminalView else { return event }
+            if isSelectAll(event) {
+                return terminal.selectCurrentInput() ? nil : event
+            }
+            return handleAfterSelection(event, in: terminal)
+        }
+    }
+
+    private static func isSelectAll(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command
+            && event.charactersIgnoringModifiers?.lowercased() == "a"
+    }
+
+    /// A seleção do terminal é só visual: o Claude Code não sabe dela. Então, com o
+    /// texto da caixa selecionado, as teclas que mexeriam na seleção num campo de
+    /// texto normal viram apagar-e-digitar no input do Claude Code.
+    private static func handleAfterSelection(_ event: NSEvent, in terminal: PaneTerminalView) -> NSEvent? {
+        guard terminal.promptSelectionText() != nil else { return event }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "x" {
+            terminal.copy(nil)
+            _ = terminal.deletePromptSelection()
             return nil
+        }
+        // Cmd+C e afins: a própria cadeia de respondedores cuida.
+        if flags.contains(.command) { return event }
+
+        switch event.keyCode {
+        case 51, 117: // delete e forward delete
+            _ = terminal.deletePromptSelection()
+            return nil
+        case 36, 76: // return e enter: manda o que está escrito, não apaga
+            terminal.clearPromptSelection()
+            return event
+        default:
+            // Digitar em cima da seleção substitui o texto, como num campo de texto.
+            // Setas, F1…F12 e teclas de função chegam como escalares reservados
+            // (0xF700+): essas só desfazem a seleção.
+            guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty,
+                  characters.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0) && $0.value < 0xF700
+                  })
+            else {
+                terminal.clearPromptSelection()
+                return event
+            }
+            _ = terminal.deletePromptSelection()
+            return event
         }
     }
 
@@ -151,6 +193,31 @@ extension LocalProcessTerminalView {
         (self as? PaneTerminalView)?.promptSelection = range
         needsDisplay = true
         return true
+    }
+
+    /// Apaga no input do Claude Code o texto que o Cmd+A selecionou, mandando um
+    /// backspace por caractere — é o que o programa do terminal entende.
+    func deletePromptSelection() -> Bool {
+        guard let bytes = promptDeleteBytes() else { return false }
+        clearPromptSelection()
+        send(data: ArraySlice(bytes))
+        return true
+    }
+
+    /// Os backspaces que apagam o texto selecionado: um por caractere. Quando o
+    /// texto só quebrou linha por causa da largura da janela, sobram alguns — e
+    /// backspace com o input já vazio não faz nada.
+    func promptDeleteBytes() -> [UInt8]? {
+        guard let text = promptSelectionText(), !text.isEmpty else { return nil }
+        return [UInt8](repeating: backspaceSendsControlH ? 8 : 0x7f, count: text.count)
+    }
+
+    /// Desfaz a seleção do Cmd+A, tanto a marcação na tela quanto o estado guardado.
+    func clearPromptSelection() {
+        (self as? PaneTerminalView)?.promptSelection = nil
+        guard let terminal: Terminal = reflect(), let selection: SelectionService = reflect() else { return }
+        terminal.terminalLock.withLock { selection.selectNone() }
+        needsDisplay = true
     }
 
     /// O texto da caixa de prompt sem as bordas que o SwiftTerm inclui quando a

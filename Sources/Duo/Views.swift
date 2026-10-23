@@ -229,12 +229,13 @@ private struct PaneRow: View {
     var body: some View {
         let isFocused = cockpit.focusedPane == pane.id
         let account = accounts.account(pane.accountID)
-        let status = cockpit.terminal(pane.id)?.status ?? .idle
         HStack(spacing: 8) {
             if pane.kind == .web {
                 Circle().strokeBorder(Theme.sky, lineWidth: 1).frame(width: 6, height: 6)
+            } else if let term = cockpit.terminal(pane.id) {
+                TerminalStatusDot(term: term)
             } else {
-                StatusDot(status: status)
+                StatusDot(status: .starting)
             }
             Text(pane.name)
                 .font(Theme.mono(11.5, .bold))
@@ -253,7 +254,7 @@ private struct PaneRow: View {
         .background(isFocused ? Theme.accent.opacity(0.1) : .clear)
         .contentShape(Rectangle())
         .onTapGesture { cockpit.focusedPane = pane.id }
-        .help(pane.kind == .web ? "claude.ai" : (cockpit.terminal(pane.id)?.status.label ?? ""))
+        .help(pane.kind == .web ? "claude.ai" : pane.directory)
     }
 }
 
@@ -280,6 +281,33 @@ private struct AccountRow: View {
         .disabled(workspaces.selected == nil)
         .padding(.horizontal, 10)
         .frame(height: 28)
+    }
+}
+
+// MARK: Pedaços que observam um terminal
+
+/// Cada uma destas observa só o seu terminal: o status de um painel não redesenha os outros.
+private struct TerminalStatusDot: View {
+    @ObservedObject var term: TerminalSession
+
+    var body: some View { StatusDot(status: term.status) }
+}
+
+private struct TerminalStatusChip: View {
+    @ObservedObject var term: TerminalSession
+
+    var body: some View {
+        let color = Theme.color(for: term.status)
+        Chip(text: term.status.label, color: color == Theme.dim ? Theme.soft : color, bold: false, size: 10)
+    }
+}
+
+private struct TerminalPaneHost: View {
+    @ObservedObject var term: TerminalSession
+
+    var body: some View {
+        PaneHost(view: term.view, inset: 8)
+            .id(ObjectIdentifier(term.view))
     }
 }
 
@@ -334,8 +362,10 @@ private struct PaneView: View {
         let accent = account?.color ?? Theme.dim
         VStack(spacing: 0) {
             PaneChrome(pane: pane, account: account, isFocused: isFocused)
-            if let view = cockpit.view(for: pane) {
-                PaneHost(view: view, inset: pane.kind == .claude ? 8 : 0)
+            if pane.kind == .claude, let term = cockpit.terminal(pane.id) {
+                TerminalPaneHost(term: term)
+            } else if let view = cockpit.view(for: pane) {
+                PaneHost(view: view, inset: 0)
                     .id(ObjectIdentifier(view))
             } else {
                 Color.black
@@ -364,8 +394,10 @@ private struct PaneChrome: View {
         HStack(spacing: 6) {
             if pane.kind == .web {
                 Circle().strokeBorder(Theme.sky, lineWidth: 1).frame(width: 6, height: 6)
+            } else if let term {
+                TerminalStatusDot(term: term)
             } else {
-                StatusDot(status: term?.status ?? .starting)
+                StatusDot(status: .starting)
             }
             Chip(text: (account?.name ?? "?").uppercased(), color: accent)
             Chip(text: pane.name, color: Theme.soft, bold: false)
@@ -377,7 +409,7 @@ private struct PaneChrome: View {
                 .layoutPriority(-1)
             Spacer(minLength: 4)
             if let term {
-                Chip(text: term.status.label, color: Theme.color(for: term.status) == Theme.dim ? Theme.soft : Theme.color(for: term.status), bold: false, size: 10)
+                TerminalStatusChip(term: term)
                 GlyphButton(glyph: "↻", help: "Reiniciar (mantém a conversa)") { term.restart(resume: true) }
             } else if pane.kind == .web {
                 let web = cockpit.web(for: pane.accountID)

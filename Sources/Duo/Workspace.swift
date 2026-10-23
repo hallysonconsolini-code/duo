@@ -90,12 +90,35 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    private static let ioQueue = DispatchQueue(label: "duo.workspaces.save")
+    private var savePending = false
+
+    /// Agrupa as gravações e as tira da main thread: os hooks de sessão mexem nos
+    /// painéis várias vezes por segundo e cada escrita travava a interface.
     private func save() {
+        guard !savePending else { return }
+        savePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.savePending = false
+            let snapshot = self.workspaces
+            Self.ioQueue.async { Self.write(snapshot) }
+        }
+    }
+
+    /// Grava agora, sem esperar o agrupamento (usada ao encerrar o app).
+    func flushSave() {
+        savePending = false
+        let snapshot = workspaces
+        Self.ioQueue.sync { Self.write(snapshot) }
+    }
+
+    private nonisolated static func write(_ list: [Workspace]) {
         do {
             try FileManager.default.createDirectory(at: Paths.appSupport, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(workspaces).write(to: Paths.workspacesFile, options: .atomic)
+            try encoder.encode(list).write(to: Paths.workspacesFile, options: .atomic)
         } catch {
             NSLog("Duo: falha ao salvar workspaces: \(error)")
         }
