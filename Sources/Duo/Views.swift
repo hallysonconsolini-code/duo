@@ -255,6 +255,7 @@ private struct Sidebar: View {
 
 private struct PaneRow: View {
     @EnvironmentObject var cockpit: Cockpit
+    @EnvironmentObject var roles: RoleStore
     @EnvironmentObject var accounts: AccountStore
     let pane: PaneSpec
     let index: Int
@@ -273,7 +274,8 @@ private struct PaneRow: View {
             Text(pane.name)
                 .font(Theme.mono(11.5, .bold))
                 .foregroundStyle(isFocused ? Theme.accentSoft : Theme.soft)
-            if let role = pane.role {
+            if let roleID = pane.role {
+                let role = roles.role(roleID)
                 Text(role.short)
                     .font(Theme.mono(10))
                     .foregroundStyle(role.color.opacity(0.9))
@@ -449,6 +451,7 @@ private struct PaneView: View {
 
 private struct PaneChrome: View {
     @EnvironmentObject var cockpit: Cockpit
+    @EnvironmentObject var roles: RoleStore
     @EnvironmentObject var workspaces: WorkspaceStore
     let pane: PaneSpec
     let account: Account?
@@ -467,7 +470,8 @@ private struct PaneChrome: View {
             }
             Chip(text: (account?.name ?? "?").uppercased(), color: accent)
             Chip(text: pane.name, color: Theme.soft, bold: false)
-            if let role = pane.role {
+            if let roleID = pane.role {
+                let role = roles.role(roleID)
                 Chip(text: role.short, color: role.color)
             } else if pane.isAwaitingRole {
                 Chip(text: "escolher papel", color: Theme.dim, bold: false, size: 10)
@@ -539,18 +543,19 @@ private struct PaneChrome: View {
 private struct RolePicker: View {
     @EnvironmentObject var cockpit: Cockpit
     @EnvironmentObject var workspaces: WorkspaceStore
+    @EnvironmentObject var roles: RoleStore
     let pane: PaneSpec
     let isFocused: Bool
 
     /// nil = sem papel.
-    private let options: [TeamRole?] = [nil] + TeamRole.allCases.map { $0 }
+    private var options: [Role?] { [nil] + roles.all.map { $0 } }
     @State private var index = 0
     @FocusState private var focused: Bool
 
-    /// Devs que já estão no workspace (decide se um novo dev ganha worktree).
+    /// Quem já edita código no workspace (decide se o novo ganha worktree).
     private var devCount: Int {
         (workspaces.workspace(containing: pane.id)?.panes ?? [])
-            .filter { $0.id != pane.id && $0.role?.isDev == true }.count
+            .filter { $0.id != pane.id && $0.role.map { roles.role($0).editsCode } == true }.count
     }
 
     var body: some View {
@@ -559,7 +564,7 @@ private struct RolePicker: View {
             ForEach(options.indices, id: \.self) { i in
                 row(i)
             }
-            Text("↑↓ ou 1–\(options.count) · ↩ abre · esc fecha")
+            Text("↑↓ ou 1–\(min(options.count, 9)) · ↩ abre · esc fecha")
                 .font(Theme.mono(10)).foregroundStyle(Theme.faint)
                 .padding(.horizontal, 10).padding(.top, 8)
         }
@@ -579,7 +584,7 @@ private struct RolePicker: View {
         .onKeyPress(.return) { open(index); return .handled }
         .onKeyPress(.escape) { cockpit.closePane(pane.id, confirm: false); return .handled }
         .onKeyPress(characters: .decimalDigits, phases: .down) { press in
-            guard let n = Int(press.characters), n >= 1, n <= options.count else { return .ignored }
+            guard let n = Int(press.characters), n >= 1, n <= min(options.count, 9) else { return .ignored }
             open(n - 1)
             return .handled
         }
@@ -590,8 +595,16 @@ private struct RolePicker: View {
     private func row(_ i: Int) -> some View {
         let role = options[i]
         let active = i == index
-        return HStack(spacing: 10) {
-            Text("\(i + 1)").font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: 12)
+        return HStack(spacing: 8) {
+            Text(i < 9 ? "\(i + 1)" : " ").font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: 12)
+            Group {
+                if let role {
+                    RoleIcon(role: role, size: 12)
+                } else {
+                    Image(systemName: "terminal").font(.system(size: 12)).foregroundStyle(Theme.dim)
+                        .frame(width: 18, height: 14.4)
+                }
+            }
             Text(role?.title ?? "Sem papel")
                 .font(Theme.mono(11.5, .bold))
                 .foregroundStyle(role?.color ?? (active ? Theme.text : Theme.soft))
@@ -610,10 +623,10 @@ private struct RolePicker: View {
         .onTapGesture { open(i) }
     }
 
-    private func subtitle(_ role: TeamRole?) -> String {
+    private func subtitle(_ role: Role?) -> String {
         guard let role else { return "claude code comum" }
         var text = "\(role.defaultModel.rawValue) · \(role.defaultEffort.label)"
-        if role.isDev, devCount >= 1 { text += " · worktree" }
+        if role.editsCode, devCount >= 1 { text += " · worktree" }
         return text
     }
 
@@ -623,7 +636,7 @@ private struct RolePicker: View {
 
     private func open(_ i: Int) {
         cockpit.focusedPane = pane.id
-        cockpit.chooseRole(options[i], for: pane.id)
+        cockpit.chooseRole(options[i]?.id, for: pane.id)
     }
 }
 

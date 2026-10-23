@@ -9,11 +9,14 @@ struct DuoApp: App {
     @StateObject private var cockpit: Cockpit
     @StateObject private var updater: Updater
     @StateObject private var teams = TeamStore()
+    @StateObject private var roles: RoleStore
 
     init() {
         let accounts = AccountStore()
         let workspaces = WorkspaceStore()
-        let cockpit = Cockpit(accounts: accounts, workspaces: workspaces)
+        let roles = RoleStore()
+        let cockpit = Cockpit(accounts: accounts, workspaces: workspaces, roles: roles)
+        _roles = StateObject(wrappedValue: roles)
         _accounts = StateObject(wrappedValue: accounts)
         _workspaces = StateObject(wrappedValue: workspaces)
         _cockpit = StateObject(wrappedValue: cockpit)
@@ -36,6 +39,7 @@ struct DuoApp: App {
                 .environmentObject(cockpit)
                 .environmentObject(updater)
                 .environmentObject(teams)
+                .environmentObject(roles)
         }
         .defaultSize(width: 1440, height: 900)
         .windowStyle(.hiddenTitleBar)

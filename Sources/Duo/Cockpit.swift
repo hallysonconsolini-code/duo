@@ -6,6 +6,7 @@ import AppKit
 final class Cockpit: ObservableObject {
     let accounts: AccountStore
     let workspaces: WorkspaceStore
+    let roles: RoleStore
 
     @Published var focusedPane: UUID? {
         didSet { if focusedPane != oldValue { focusViewOfFocusedPane() } }
@@ -21,9 +22,10 @@ final class Cockpit: ObservableObject {
     private var bridge: Bridge!
     private var mouseMonitor: Any?
 
-    init(accounts: AccountStore, workspaces: WorkspaceStore) {
+    init(accounts: AccountStore, workspaces: WorkspaceStore, roles: RoleStore) {
         self.accounts = accounts
         self.workspaces = workspaces
+        self.roles = roles
         bridge = Bridge { [weak self] request in
             await self?.handle(request) ?? .empty(404)
         }
@@ -131,10 +133,10 @@ final class Cockpit: ObservableObject {
     }
 
     /// Cria um painel por membro, cada um com papel, modelo, esforço e instruções.
-    /// Com 2 ou mais devs, cada dev ganha um git worktree próprio.
+    /// Com 2 ou mais que editam código, cada um ganha um git worktree próprio.
     func createTeam(_ slots: [TeamSlot], in wsID: UUID) {
         guard let ws = workspaces.workspaces.first(where: { $0.id == wsID }) else { return }
-        let devCount = slots.filter { $0.role.isDev }.count
+        let devCount = slots.filter { roles.role($0.role).editsCode }.count
         var draft = ws
         var specs: [PaneSpec] = []
         for slot in slots {
@@ -148,7 +150,7 @@ final class Cockpit: ObservableObject {
         // A equipe inteira deste workspace (inclui membros que já estavam lá).
         let team = Self.team(of: draft)
         for i in specs.indices {
-            specs[i].systemPrompt = TeamPrompt.build(for: specs[i], team: team, projectDir: ws.directory)
+            specs[i].systemPrompt = TeamPrompt.build(for: specs[i], team: team, projectDir: ws.directory, roles: roles)
         }
         workspaces.update(wsID) { $0.panes.append(contentsOf: specs) }
         for pane in specs { launch(pane, prompt: nil) }
@@ -156,12 +158,12 @@ final class Cockpit: ObservableObject {
         focusedPane = (specs.first { $0.role == .manager } ?? specs.first)?.id
     }
 
-    /// Dá papel, modelo e esforço a um painel. Dev com `isolate` ganha um git worktree próprio.
+    /// Dá papel, modelo e esforço a um painel. Quem edita código, com `isolate`, ganha um git worktree próprio.
     private func assign(_ slot: TeamSlot, to pane: inout PaneSpec, isolate: Bool, projectDir: String) {
         pane.role = slot.role
         pane.model = slot.model.rawValue
         pane.effort = slot.effort.rawValue
-        if slot.role.isDev, isolate, let tree = Worktrees.create(for: projectDir, paneName: pane.name) {
+        if roles.role(slot.role).editsCode, isolate, let tree = Worktrees.create(for: projectDir, paneName: pane.name) {
             pane.directory = tree.directory
             pane.branch = tree.branch
         }
@@ -174,17 +176,19 @@ final class Cockpit: ObservableObject {
 
     /// Conclui o "escolher papel" de um painel aberto pelo ⌘T e inicia o claude.
     /// `role` nil = Claude Code comum, sem papel.
-    func chooseRole(_ role: TeamRole?, for paneID: UUID) {
+    func chooseRole(_ roleID: RoleID?, for paneID: UUID) {
         guard let ws = workspaces.workspace(containing: paneID),
               var pane = ws.panes.first(where: { $0.id == paneID }), pane.isAwaitingRole else { return }
         pane.awaitingRole = nil
-        if let role {
-            // Com este, 2+ devs no workspace: o novo dev ganha worktree. Os que já existem não mudam.
-            let devs = ws.panes.filter { $0.id != paneID && $0.role?.isDev == true }.count + (role.isDev ? 1 : 0)
+        if let roleID {
+            let role = roles.role(roleID)
+            // Com este, 2+ que editam código no workspace: o novo ganha worktree. Os que já existem não mudam.
+            let devs = ws.panes.filter { $0.id != paneID && $0.role.map { roles.role($0).editsCode } == true }.count
+                + (role.editsCode ? 1 : 0)
             assign(TeamSlot(role: role), to: &pane, isolate: devs >= 2, projectDir: ws.directory)
             var draft = ws
             if let i = draft.panes.firstIndex(where: { $0.id == paneID }) { draft.panes[i] = pane }
-            pane.systemPrompt = TeamPrompt.build(for: pane, team: Self.team(of: draft), projectDir: ws.directory)
+            pane.systemPrompt = TeamPrompt.build(for: pane, team: Self.team(of: draft), projectDir: ws.directory, roles: roles)
         }
         let updated = pane
         workspaces.updatePane(paneID) { $0 = updated }
@@ -495,7 +499,7 @@ final class Cockpit: ObservableObject {
                     : pane.isAwaitingRole ? "escolhendo papel" : (terminals[pane.id]?.status.label ?? "?")
                 let me = pane.id == caller ? "  ← você" : ""
                 var who = pane.name
-                if let role = pane.role { who += " (\(role.short))" }
+                if let role = pane.role { who += " (\(roles.role(role).short))" }
                 if let model = pane.model { who += " · \(model)" }
                 return "\(who) · \(account) · \(status)\(me)"
             }

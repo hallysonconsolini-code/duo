@@ -7,6 +7,7 @@ struct TeamSetupView: View {
     @EnvironmentObject var cockpit: Cockpit
     @EnvironmentObject var accounts: AccountStore
     @EnvironmentObject var teams: TeamStore
+    @EnvironmentObject var roles: RoleStore
     let request: TeamSetupRequest
 
     private enum Choice: Hashable {
@@ -161,7 +162,7 @@ struct TeamSetupView: View {
                             .font(Theme.mono(10)).foregroundStyle(Theme.dim)
                     }
                     members
-                    if slots.filter({ $0.role.isDev }).count >= 2 {
+                    if slots.filter({ roles.role($0.role).editsCode }).count >= 2 {
                         Text("Cada dev trabalha numa cópia isolada do repositório (git worktree) em .claude/worktrees/. O gerente junta as branches.")
                             .font(Theme.mono(10)).foregroundStyle(Theme.faint)
                             .fixedSize(horizontal: false, vertical: true)
@@ -173,10 +174,11 @@ struct TeamSetupView: View {
     }
 
     private var composition: some View {
-        HStack(spacing: 10) {
-            ForEach(TeamRole.allCases) { role in
-                RoleCard(role: role, count: slots.filter { $0.role == role }.count,
-                         decrement: { removeLast(role) }, increment: { add(role) })
+        // Cinco por linha na largura normal; papéis customizados quebram para a linha de baixo.
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 10)], spacing: 10) {
+            ForEach(roles.all) { role in
+                RoleCard(role: role, count: slots.filter { $0.role == role.id }.count,
+                         decrement: { removeLast(role.id) }, increment: { add(role) })
             }
         }
     }
@@ -232,13 +234,14 @@ struct TeamSetupView: View {
 
     private func memberRow(_ index: Int) -> some View {
         let slot = slots[index]
+        let role = roles.role(slot.role)
         return HStack(spacing: Column.spacing) {
             Text("p\(existingCount + index + 1)")
                 .font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: Column.pane, alignment: .leading)
             HStack(spacing: 6) {
-                RoleIcon(role: slot.role, size: 12)
-                Text(slot.role.title)
-                    .font(Theme.mono(11.5, .bold)).foregroundStyle(slot.role.color)
+                RoleIcon(role: role, size: 12)
+                Text(role.title)
+                    .font(Theme.mono(11.5, .bold)).foregroundStyle(role.color)
                     .lineLimit(1)
             }
             .frame(width: Column.role, alignment: .leading)
@@ -246,11 +249,11 @@ struct TeamSetupView: View {
                 .frame(width: Column.account, alignment: .leading)
             SegmentedChoice(options: AIModel.allCases,
                             selection: Binding(get: { slots[index].model }, set: { slots[index].model = $0; edited() }),
-                            label: { $0.rawValue }, tint: slot.role.color)
+                            label: { $0.rawValue }, tint: role.color)
                 .frame(width: Column.model, alignment: .leading)
             SegmentedChoice(options: Effort.allCases,
                             selection: Binding(get: { slots[index].effort }, set: { slots[index].effort = $0; edited() }),
-                            label: { $0.label }, tint: slot.role.color)
+                            label: { $0.label }, tint: role.color)
                 .frame(width: Column.effort, alignment: .leading)
             Spacer(minLength: 0)
             GlyphButton(glyph: "×", help: "Remover", size: 11) {
@@ -332,27 +335,27 @@ struct TeamSetupView: View {
             slots = []
         case .template(let id):
             let template = teams.all.first { $0.id == id } ?? TeamTemplate.standard
-            slots = template.slots.map { slot in
+            // Papéis apagados (arquivados) ficam de fora ao aplicar o template.
+            slots = template.slots.filter { roles.isAvailable($0.role) }.map { slot in
                 TeamSlot(role: slot.role, model: slot.model, effort: slot.effort, accountID: defaultAccount(for: slot.role))
             }
         }
     }
 
-    private func defaultAccount(for role: TeamRole) -> UUID? {
+    private func defaultAccount(for role: RoleID) -> UUID? {
         if let id = teams.lastAccount(for: role), accounts.account(id) != nil { return id }
         return accounts.accounts.first?.id
     }
 
-    private func add(_ role: TeamRole) {
-        // Mantém os papéis agrupados na ordem de TeamRole.
-        let order = TeamRole.allCases
-        let slot = TeamSlot(role: role, accountID: defaultAccount(for: role))
-        let at = slots.lastIndex { order.firstIndex(of: $0.role)! <= order.firstIndex(of: role)! }.map { $0 + 1 } ?? 0
+    private func add(_ role: Role) {
+        // Mantém os papéis agrupados na ordem do RoleStore.
+        let slot = TeamSlot(role: role, accountID: defaultAccount(for: role.id))
+        let at = slots.lastIndex { roles.order(of: $0.role) <= roles.order(of: role.id) }.map { $0 + 1 } ?? 0
         slots.insert(slot, at: at)
         edited()
     }
 
-    private func removeLast(_ role: TeamRole) {
+    private func removeLast(_ role: RoleID) {
         guard let i = slots.lastIndex(where: { $0.role == role }) else { return }
         slots.remove(at: i)
         edited()
@@ -371,60 +374,12 @@ struct TeamSetupView: View {
     }
 }
 
-// MARK: Papéis: ícone e card
-
-extension TeamRole {
-    /// SF Symbol do papel. Sênior e júnior usam o mesmo, com selo SR/JR (RoleIcon).
-    var symbol: String {
-        switch self {
-        case .manager: "list.bullet.clipboard"
-        case .seniorDev, .juniorDev: "chevron.left.forwardslash.chevron.right"
-        case .designer: "paintpalette"
-        case .qa: "checkmark.seal"
-        }
-    }
-
-    /// O que o papel faz, numa linha.
-    var blurb: String {
-        switch self {
-        case .manager: "planeja e revisa"
-        case .seniorDev: "código complexo"
-        case .juniorDev: "tarefas simples"
-        case .designer: "Figma e UI"
-        case .qa: "testa entregas"
-        }
-    }
-}
-
-/// Ícone do papel na cor dele. Devs ganham um selo SR/JR no canto.
-struct RoleIcon: View {
-    let role: TeamRole
-    var size: CGFloat = 20
-    var lit = true
-
-    var body: some View {
-        let color = lit ? role.color : role.color.opacity(0.35)
-        Image(systemName: role.symbol)
-            .font(.system(size: size, weight: .medium))
-            .foregroundStyle(color)
-            .frame(width: size * 1.5, height: size * 1.2)
-            .overlay(alignment: .bottomTrailing) {
-                if role.isDev, size >= 16 {
-                    Text(role == .seniorDev ? "SR" : "JR")
-                        .font(Theme.mono(size * 0.38, .bold))
-                        .foregroundStyle(Theme.bg)
-                        .padding(.horizontal, 3)
-                        .background(Capsule().fill(color))
-                        .offset(x: size * 0.25, y: size * 0.25)
-                }
-            }
-    }
-}
+// MARK: Card de papel
 
 /// Card de um papel na composição da equipe: ícone, nome, o que faz, modelo padrão e o contador.
 /// Apagado com 0 membros, aceso na cor do papel com 1 ou mais.
 private struct RoleCard: View {
-    let role: TeamRole
+    let role: Role
     let count: Int
     let decrement: () -> Void
     let increment: () -> Void
@@ -439,7 +394,8 @@ private struct RoleCard: View {
                 .font(Theme.mono(11.5, .bold))
                 .foregroundStyle(lit ? Theme.text : Theme.dim)
                 .lineLimit(1)
-            Text(role.blurb)
+                .minimumScaleFactor(0.8)
+            Text(role.blurb.isEmpty ? " " : role.blurb)
                 .font(Theme.mono(10))
                 .foregroundStyle(lit ? Theme.soft : Theme.faint)
                 .lineLimit(1)
