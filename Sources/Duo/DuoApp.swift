@@ -46,11 +46,11 @@ struct DuoApp: App {
             }
             CommandGroup(replacing: .newItem) {
                 Button("Novo painel") {
-                    cockpit.addPane(kind: .claude, accountID: cockpit.focusedAccountID)
+                    cockpit.addPane(kind: .claude, accountID: cockpit.focusedAccountID, askRole: true)
                 }
                 .keyboardShortcut("t", modifiers: .command)
                 Button("Novo painel com outra conta") {
-                    cockpit.addPane(kind: .claude, accountID: cockpit.otherAccountID)
+                    cockpit.addPane(kind: .claude, accountID: cockpit.otherAccountID, askRole: true)
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Novo workspace…") { cockpit.openWorkspace() }

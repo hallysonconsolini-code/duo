@@ -26,6 +26,11 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     var systemPrompt: String?
     /// Branch do worktree do dev, quando tem cópia isolada.
     var branch: String?
+    /// Painel aberto pelo ⌘T esperando a escolha de papel; o claude ainda não iniciou.
+    /// Não sobrevive a reabrir o app (é descartado ao carregar).
+    var awaitingRole: Bool?
+
+    var isAwaitingRole: Bool { awaitingRole == true }
 
     /// Só dá para retomar uma sessão que já tem conversa gravada em disco.
     var resumableSessionID: String? {
@@ -63,7 +68,12 @@ final class WorkspaceStore: ObservableObject {
     init() {
         if let data = try? Data(contentsOf: Paths.workspacesFile),
            let decoded = try? JSONDecoder().decode([Workspace].self, from: data) {
-            workspaces = decoded
+            // Painéis que ficaram em "escolher papel" não têm processo nem conversa: descarta.
+            workspaces = decoded.map { ws in
+                var ws = ws
+                ws.panes.removeAll { $0.isAwaitingRole }
+                return ws
+            }
         } else {
             workspaces = []
         }
