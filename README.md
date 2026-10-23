@@ -30,10 +30,12 @@ que eles conversem entre si.
 | ⌘W | fechar painel |
 | ⌘1…⌘9 | focar painel |
 | ⌘↩ | zoom no painel |
+| ⌃⌘= / ⌃⌘- | aumentar / diminuir o painel em foco (1×1 ↔ 2×1 ↔ 2×2) |
 | ⇧⌘[ / ⇧⌘] | workspace anterior / próximo |
 
 Clique com o botão direito no cabeçalho de um painel para encaminhar a última resposta
-dele para outro painel.
+dele para outro painel ou mudar o tamanho dele (também pelo botão ⊞ do cabeçalho ou pela
+alça no canto inferior direito).
 
 ## Compilar
 

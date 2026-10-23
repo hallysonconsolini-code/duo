@@ -293,6 +293,17 @@ final class Cockpit: ObservableObject {
         }
     }
 
+    /// Muda quantas células do grid o painel ocupa. Só o frame muda: o terminal continua o mesmo.
+    func setSize(_ size: PaneSize, for paneID: UUID) {
+        workspaces.updatePane(paneID) { $0.size = size }
+    }
+
+    /// Atalho de aumentar/diminuir o painel em foco: 1×1 ↔ 2×1 ↔ 2×2.
+    func resizeFocusedPane(bigger: Bool) {
+        guard let id = focusedPane, let pane = workspaces.pane(id) else { return }
+        setSize(bigger ? pane.size.bigger : pane.size.smaller, for: id)
+    }
+
     func closeFocusedPane() {
         if let id = focusedPane { closePane(id) }
     }

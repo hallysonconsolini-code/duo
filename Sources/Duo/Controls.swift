@@ -91,12 +91,7 @@ private struct DuoButtonBody: View {
 /// Seletor de uma opção numa lista (ex.: conta). O controle fechado e a lista aberta
 /// (num popover) são do Duo; Esc ou clicar fora fecha a lista.
 struct DuoMenuPicker<Value: Hashable>: View {
-    struct Option: Identifiable {
-        let value: Value
-        let label: String
-        var color: Color?
-        var id: Value { value }
-    }
+    typealias Option = DuoMenuOption<Value>
 
     let options: [Option]
     @Binding var selection: Value
@@ -126,16 +121,38 @@ struct DuoMenuPicker<Value: Hashable>: View {
     }
 
     private var list: some View {
+        DuoMenuList(options: options, selection: selection, minWidth: max(width, 140)) { value in
+            selection = value
+            open = false
+        }
+    }
+}
+
+/// Uma opção de DuoMenuPicker / DuoMenuList.
+struct DuoMenuOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let label: String
+    var color: Color?
+    /// Texto curto à direita, apagado (ex.: "2×1").
+    var detail: String?
+    var id: Value { value }
+}
+
+/// Lista de opções no visual do Duo, com a atual marcada. Feita para ir dentro de um popover.
+struct DuoMenuList<Value: Hashable>: View {
+    let options: [DuoMenuOption<Value>]
+    let selection: Value
+    var minWidth: CGFloat = 140
+    let pick: (Value) -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(options) { option in
-                DuoMenuRow(option: option, active: option.value == selection) {
-                    selection = option.value
-                    open = false
-                }
+                DuoMenuRow(option: option, active: option.value == selection) { pick(option.value) }
             }
         }
         .padding(4)
-        .frame(minWidth: max(width, 140))
+        .frame(minWidth: minWidth)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
     }
@@ -177,7 +194,7 @@ private struct MenuFieldStyle: ButtonStyle {
 }
 
 private struct DuoMenuRow<Value: Hashable>: View {
-    let option: DuoMenuPicker<Value>.Option
+    let option: DuoMenuOption<Value>
     let active: Bool
     let action: () -> Void
     @State private var hover = false
@@ -194,6 +211,9 @@ private struct DuoMenuRow<Value: Hashable>: View {
                     .foregroundStyle(active || hover ? Theme.text : Theme.soft)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if let detail = option.detail {
+                    Text(detail).font(Theme.mono(10)).foregroundStyle(Theme.dim)
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 24)

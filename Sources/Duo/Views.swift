@@ -371,50 +371,114 @@ private struct TerminalModelChip: View {
 
 private struct TerminalPaneHost: View {
     @ObservedObject var term: TerminalSession
+    var hidden = false
 
     var body: some View {
-        PaneHost(view: term.view, inset: 8)
+        PaneHost(view: term.view, inset: 8, hidden: hidden)
             .id(ObjectIdentifier(term.view))
     }
 }
 
 // MARK: Grid
 
+/// Painéis em posição absoluta dentro do espaço disponível. Cada painel é identificado
+/// pelo id: mudar tamanho, abrir ou fechar outro painel só muda o frame, sem recriar a
+/// view nem tirar o terminal (NSView do SwiftTerm) do lugar. No zoom, os outros painéis
+/// continuam na árvore, escondidos, pelo mesmo motivo.
 private struct PaneGrid: View {
     @EnvironmentObject var cockpit: Cockpit
     let workspace: Workspace
 
-    private var visible: [PaneSpec] {
-        if cockpit.zoomed, let id = cockpit.focusedPane, let pane = workspace.panes.first(where: { $0.id == id }) {
-            return [pane]
-        }
-        return workspace.panes
+    static let spacing: CGFloat = 6
+    static let padding: CGFloat = 6
+
+    private struct Placed: Identifiable {
+        let pane: PaneSpec
+        let item: GridLayout.Item
+        var id: UUID { pane.id }
     }
 
-    /// 1 → 1, 2 → 2, 3 → 3, 4 → 2x2, 5–6 → 3x2, 7–9 → 3x3, depois 4 colunas.
-    private func columns(for count: Int) -> Int {
-        switch count {
-        case ...3: max(count, 1)
-        case 4: 2
-        case 5...9: 3
-        default: 4
-        }
+    /// Tamanho que a alça de arrastar vai aplicar ao soltar, e onde desenhar a prévia.
+    private struct ResizePreview {
+        let id: UUID
+        let size: PaneSize
+        let rect: CGRect
+    }
+
+    @State private var preview: ResizePreview?
+
+    private var zoomedID: UUID? {
+        guard cockpit.zoomed, let id = cockpit.focusedPane, workspace.panes.contains(where: { $0.id == id }) else { return nil }
+        return id
     }
 
     var body: some View {
-        let panes = visible
-        let cols = columns(for: panes.count)
-        let rows = stride(from: 0, to: panes.count, by: cols).map { Array(panes[$0..<min($0 + cols, panes.count)]) }
-        VStack(spacing: 6) {
-            ForEach(rows.indices, id: \.self) { r in
-                HStack(spacing: 6) {
-                    ForEach(rows[r]) { pane in
-                        PaneView(pane: pane)
+        let panes = workspace.panes
+        let layout = GridLayout.make(spans: panes.map { (col: $0.colSpan, row: $0.rowSpan) })
+        let placed = zip(panes, layout.items).map { Placed(pane: $0, item: $1) }
+        let zoomedID = zoomedID
+        GeometryReader { geo in
+            let full = CGRect(origin: .zero, size: geo.size).insetBy(dx: Self.padding, dy: Self.padding)
+            ZStack(alignment: .topLeading) {
+                ForEach(placed) { p in
+                    let pane = p.pane, item = p.item
+                    let hidden = zoomedID != nil && zoomedID != pane.id
+                    let rect = zoomedID == pane.id
+                        ? full
+                        : layout.frame(of: item, in: geo.size, spacing: Self.spacing, padding: Self.padding)
+                    PaneView(pane: pane, hidden: hidden, resizable: zoomedID == nil) { translation, ended in
+                        resize(pane, from: rect, by: translation, ended: ended, bounds: full)
                     }
+                        .frame(width: max(rect.width, 0), height: max(rect.height, 0))
+                        .position(x: rect.midX, y: rect.midY)
+                        .opacity(hidden ? 0 : 1)
+                        .allowsHitTesting(!hidden)
+                        .zIndex(zoomedID == pane.id ? 1 : 0)
+                }
+                if let preview, zoomedID == nil {
+                    ResizePreviewOutline(size: preview.size)
+                        .frame(width: preview.rect.width, height: preview.rect.height)
+                        .position(x: preview.rect.midX, y: preview.rect.midY)
+                        .allowsHitTesting(false)
+                        .zIndex(2)
                 }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
-        .padding(6)
+    }
+
+    /// Alça de arrastar: passar de 1/4 do painel para a direita/baixo pede 2 células naquela
+    /// direção; para a esquerda/cima, 1. A prévia é aproximada (o grid se reorganiza ao soltar).
+    private func resize(_ pane: PaneSpec, from rect: CGRect, by t: CGSize, ended: Bool, bounds: CGRect) {
+        let current = pane.size
+        var cols = current.colSpan, rows = current.rowSpan
+        if t.width > rect.width / 4 { cols = 2 } else if t.width < -rect.width / 4 { cols = 1 }
+        if t.height > rect.height / 4 { rows = 2 } else if t.height < -rect.height / 4 { rows = 1 }
+        let target = PaneSize(colSpan: cols, rowSpan: rows)
+        if ended {
+            preview = nil
+            if target != current { cockpit.setSize(target, for: pane.id) }
+            return
+        }
+        func scaled(_ length: CGFloat, from a: Int, to b: Int) -> CGFloat {
+            b > a ? length * 2 + Self.spacing : (b < a ? (length - Self.spacing) / 2 : length)
+        }
+        let size = CGSize(width: scaled(rect.width, from: current.colSpan, to: cols),
+                          height: scaled(rect.height, from: current.rowSpan, to: rows))
+        let outline = CGRect(origin: rect.origin, size: size).intersection(bounds)
+        preview = ResizePreview(id: pane.id, size: target, rect: outline.isNull ? rect : outline)
+    }
+}
+
+/// Contorno mostrado enquanto a alça é arrastada, com o tamanho que será aplicado.
+private struct ResizePreviewOutline: View {
+    let size: PaneSize
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Theme.accent.opacity(0.06))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.accent.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+            .overlay { Chip(text: size.label, color: Theme.accent) }
     }
 }
 
@@ -422,6 +486,12 @@ private struct PaneView: View {
     @EnvironmentObject var cockpit: Cockpit
     @EnvironmentObject var accounts: AccountStore
     let pane: PaneSpec
+    /// Escondido atrás do painel em zoom: continua montado, com a NSView oculta.
+    var hidden = false
+    /// Mostra a alça de arrastar no canto inferior direito.
+    var resizable = false
+    /// Arrasto da alça: deslocamento desde o clique e se o botão foi solto.
+    var onResize: (CGSize, Bool) -> Void = { _, _ in }
 
     var body: some View {
         let isFocused = cockpit.focusedPane == pane.id
@@ -432,9 +502,9 @@ private struct PaneView: View {
             if pane.isAwaitingRole {
                 RolePicker(pane: pane, isFocused: isFocused)
             } else if pane.kind == .claude, let term = cockpit.terminal(pane.id) {
-                TerminalPaneHost(term: term)
+                TerminalPaneHost(term: term, hidden: hidden)
             } else if let view = cockpit.view(for: pane) {
-                PaneHost(view: view, inset: 0)
+                PaneHost(view: view, inset: 0, hidden: hidden)
                     .id(ObjectIdentifier(view))
             } else {
                 Color.black
@@ -446,7 +516,11 @@ private struct PaneView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isFocused ? accent.opacity(0.7) : Theme.paneBorder, lineWidth: 1)
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottomTrailing) {
+            // NSView própria: fica acima da NSView do terminal na ordem do AppKit e recebe o clique.
+            ResizeHandle(hidden: hidden || !resizable, onDrag: onResize)
+                .frame(width: 14, height: 14)
+        }
     }
 }
 
@@ -495,6 +569,7 @@ private struct PaneChrome: View {
                 GlyphButton(glyph: "←", help: "Voltar") { web.goBack() }
                 GlyphButton(glyph: "↻", help: "Recarregar") { web.reload() }
             }
+            PaneSizeButton(pane: pane)
             GlyphButton(glyph: cockpit.zoomed ? "⤡" : "⤢", help: "Zoom (⌘↩)") {
                 cockpit.focusedPane = pane.id
                 cockpit.zoomed.toggle()
@@ -535,7 +610,44 @@ private struct PaneChrome: View {
             }
             Divider()
         }
+        Menu("Tamanho") {
+            ForEach(PaneSize.allCases, id: \.self) { size in
+                Toggle(size.label, isOn: Binding(
+                    get: { pane.size == size },
+                    set: { _ in cockpit.setSize(size, for: pane.id) }
+                ))
+            }
+            Divider()
+            Button("Aumentar") { cockpit.setSize(pane.size.bigger, for: pane.id) }
+                .keyboardShortcut("=", modifiers: [.command, .control])
+                .disabled(pane.size.bigger == pane.size)
+            Button("Diminuir") { cockpit.setSize(pane.size.smaller, for: pane.id) }
+                .keyboardShortcut("-", modifiers: [.command, .control])
+                .disabled(pane.size.smaller == pane.size)
+        }
+        Divider()
         Button("Fechar \(pane.name)") { cockpit.closePane(pane.id) }
+    }
+}
+
+/// Botão do topo do painel que abre os tamanhos prontos numa lista do Duo.
+private struct PaneSizeButton: View {
+    @EnvironmentObject var cockpit: Cockpit
+    let pane: PaneSpec
+    @State private var open = false
+
+    var body: some View {
+        GlyphButton(glyph: "⊞", help: "Tamanho: \(pane.size.label) (⌃⌘= / ⌃⌘−)") { open.toggle() }
+            .popover(isPresented: $open, arrowEdge: .bottom) {
+                DuoMenuList(
+                    options: PaneSize.allCases.map { .init(value: $0, label: $0.title, detail: "\($0.colSpan)×\($0.rowSpan)") },
+                    selection: pane.size,
+                    minWidth: 150
+                ) { size in
+                    cockpit.setSize(size, for: pane.id)
+                    open = false
+                }
+            }
     }
 }
 
@@ -667,11 +779,90 @@ private struct RolePicker: View {
     }
 }
 
+/// Alça de redimensionar no canto do painel. É uma NSView para receber o clique mesmo
+/// estando por cima do terminal (que também é NSView).
+private struct ResizeHandle: NSViewRepresentable {
+    var hidden: Bool
+    let onDrag: (CGSize, Bool) -> Void
+
+    func makeNSView(context: Context) -> ResizeHandleView { ResizeHandleView() }
+
+    func updateNSView(_ view: ResizeHandleView, context: Context) {
+        view.onDrag = onDrag
+        if view.isHidden != hidden { view.isHidden = hidden }
+    }
+}
+
+final class ResizeHandleView: NSView {
+    var onDrag: ((CGSize, Bool) -> Void)?
+    private var start: NSPoint?
+    private var hover = false { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func resetCursorRects() {
+        let cursor: NSCursor
+        if #available(macOS 15, *) {
+            cursor = .frameResize(position: .bottomRight, directions: .all)
+        } else {
+            cursor = .crosshair
+        }
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hover = true }
+    override func mouseExited(with event: NSEvent) { hover = false }
+
+    override func mouseDown(with event: NSEvent) { start = event.locationInWindow }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start else { return }
+        onDrag?(delta(event, start), false)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let start else { return }
+        self.start = nil
+        onDrag?(delta(event, start), true)
+    }
+
+    /// Em coordenadas de janela o y cresce para cima; aqui, para baixo (como no SwiftUI).
+    private func delta(_ event: NSEvent, _ start: NSPoint) -> CGSize {
+        CGSize(width: event.locationInWindow.x - start.x, height: start.y - event.locationInWindow.y)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Três traços diagonais, como a alça de redimensionar do macOS.
+        let color = (hover || start != nil) ? Theme.nsText.withAlphaComponent(0.8) : Theme.nsText.withAlphaComponent(0.3)
+        color.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        let w = bounds.width, h = bounds.height
+        for k in [4.0, 7.5, 11.0] {
+            path.move(to: NSPoint(x: w - 2, y: h - 2 - k))
+            path.line(to: NSPoint(x: w - 2 - k, y: h - 2))
+        }
+        path.stroke()
+    }
+}
+
 /// Hospeda a NSView viva de um painel (terminal ou web). A view continua existindo
 /// quando o painel some da tela, então o processo não para.
 private struct PaneHost: NSViewRepresentable {
     let view: NSView
     let inset: CGFloat
+    /// Oculta a view sem tirá-la do container (painel atrás do zoom). Oculta, ela não
+    /// recebe clique nem é escolhida pelo foco por clique (`isHiddenOrHasHiddenAncestor`).
+    var hidden = false
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -681,9 +872,13 @@ private struct PaneHost: NSViewRepresentable {
     }
 
     func updateNSView(_ container: NSView, context: Context) {
-        guard view.superview !== container else { return }
+        if container.isHidden != hidden { container.isHidden = hidden }
+        if view.superview === container {
+            if view.isHidden != hidden { view.isHidden = hidden }
+            return
+        }
         container.subviews.forEach { $0.removeFromSuperview() }
-        view.isHidden = false
+        view.isHidden = hidden
         // Constraints em vez de frame: o container nasce com tamanho zero, e um frame
         // com margem calculado nessa hora vira um retângulo nulo que nunca se recupera.
         view.translatesAutoresizingMaskIntoConstraints = false

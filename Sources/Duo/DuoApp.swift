@@ -68,6 +68,10 @@ struct DuoApp: App {
             CommandMenu("Painel") {
                 Button(cockpit.zoomed ? "Sair do zoom" : "Zoom no painel") { cockpit.zoomed.toggle() }
                     .keyboardShortcut(.return, modifiers: .command)
+                Button("Aumentar painel") { cockpit.resizeFocusedPane(bigger: true) }
+                    .keyboardShortcut("=", modifiers: [.command, .control])
+                Button("Diminuir painel") { cockpit.resizeFocusedPane(bigger: false) }
+                    .keyboardShortcut("-", modifiers: [.command, .control])
                 Divider()
                 ForEach(1..<10) { n in
                     Button("Ir para painel \(n)") { cockpit.focusPane(number: n) }

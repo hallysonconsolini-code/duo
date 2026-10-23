@@ -29,8 +29,16 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     /// Painel aberto pelo ⌘T esperando a escolha de papel; o claude ainda não iniciou.
     /// Não sobrevive a reabrir o app (é descartado ao carregar).
     var awaitingRole: Bool?
+    /// Quantas colunas e linhas do grid o painel ocupa (1 ou 2). Arquivos antigos não têm: 1.
+    var colSpan = 1
+    var rowSpan = 1
 
     var isAwaitingRole: Bool { awaitingRole == true }
+
+    var size: PaneSize {
+        get { PaneSize(colSpan: colSpan, rowSpan: rowSpan) }
+        set { colSpan = newValue.colSpan; rowSpan = newValue.rowSpan }
+    }
 
     /// Só dá para retomar uma sessão que já tem conversa gravada em disco.
     var resumableSessionID: String? {
@@ -38,6 +46,75 @@ struct PaneSpec: Codable, Identifiable, Equatable {
               FileManager.default.fileExists(atPath: path) else { return nil }
         return id
     }
+}
+
+extension PaneSpec {
+    // Decodificação escrita à mão só para que colSpan e rowSpan tenham padrão 1
+    // quando faltam (workspaces.json de versões anteriores). A codificação continua sintetizada.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        name = try c.decode(String.self, forKey: .name)
+        accountID = try c.decode(UUID.self, forKey: .accountID)
+        directory = try c.decode(String.self, forKey: .directory)
+        claudeSessionID = try c.decodeIfPresent(String.self, forKey: .claudeSessionID)
+        claudeTranscriptPath = try c.decodeIfPresent(String.self, forKey: .claudeTranscriptPath)
+        role = try c.decodeIfPresent(RoleID.self, forKey: .role)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        effort = try c.decodeIfPresent(String.self, forKey: .effort)
+        systemPrompt = try c.decodeIfPresent(String.self, forKey: .systemPrompt)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        awaitingRole = try c.decodeIfPresent(Bool.self, forKey: .awaitingRole)
+        colSpan = PaneSize.clamp(try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 1)
+        rowSpan = PaneSize.clamp(try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 1)
+    }
+}
+
+/// Tamanhos prontos de um painel no grid.
+enum PaneSize: CaseIterable, Hashable {
+    case normal, wide, tall, large
+
+    init(colSpan: Int, rowSpan: Int) {
+        switch (colSpan >= 2, rowSpan >= 2) {
+        case (false, false): self = .normal
+        case (true, false): self = .wide
+        case (false, true): self = .tall
+        case (true, true): self = .large
+        }
+    }
+
+    var colSpan: Int { self == .wide || self == .large ? 2 : 1 }
+    var rowSpan: Int { self == .tall || self == .large ? 2 : 1 }
+
+    var title: String {
+        switch self {
+        case .normal: "Normal"
+        case .wide: "Largo"
+        case .tall: "Alto"
+        case .large: "Grande"
+        }
+    }
+
+    var label: String { "\(title) \(colSpan)×\(rowSpan)" }
+
+    /// Atalho de aumentar: 1×1 → 2×1 → 2×2 (o alto vai para o grande).
+    var bigger: PaneSize {
+        switch self {
+        case .normal: .wide
+        case .wide, .tall, .large: .large
+        }
+    }
+
+    /// Atalho de diminuir: 2×2 → 2×1 → 1×1 (o alto vai para o normal).
+    var smaller: PaneSize {
+        switch self {
+        case .large: .wide
+        case .wide, .tall, .normal: .normal
+        }
+    }
+
+    static func clamp(_ span: Int) -> Int { min(max(span, 1), 2) }
 }
 
 /// Um projeto: uma pasta e o grid de painéis que trabalham nela.
