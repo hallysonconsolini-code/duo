@@ -10,12 +10,54 @@ enum NoticePrefs {
     static let backgroundKey = "notifyInBackground"
     /// Som baixo quando a equipe de um workspace termina.
     static let soundKey = "soundOnTeamDone"
+    /// Id do som da equipe (`TeamSound.id`) e o volume dele (0 a 1).
+    static let soundChoiceKey = "teamDoneSound"
+    static let volumeKey = "teamDoneVolume"
+    static let defaultVolume = 0.3
 
     static var enabled: Bool { flag(enabledKey) }
     static var background: Bool { flag(backgroundKey) }
     static var sound: Bool { flag(soundKey) }
+    static var soundChoice: String { UserDefaults.standard.string(forKey: soundChoiceKey) ?? TeamSound.defaultID }
+    static var volume: Double { UserDefaults.standard.object(forKey: volumeKey) as? Double ?? defaultVolume }
 
     private static func flag(_ key: String) -> Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+}
+
+/// Sons para "equipe terminou": os MP3 em Resources/Sounds (copiados para o bundle pelo
+/// build-app.sh) e o Pop do sistema, que é também o reserva se o arquivo não carregar.
+struct TeamSound: Identifiable {
+    let id: String
+    let label: String
+
+    static let popID = "pop"
+    static let defaultID = "soft-electronic"
+
+    static let all: [TeamSound] = [
+        .init(id: "soft-electronic", label: "Eletrônico suave"),
+        .init(id: "minimal-ai", label: "Minimal"),
+        .init(id: "subtle-ai-1", label: "Sutil 1"),
+        .init(id: "subtle-ai-2", label: "Sutil 2"),
+        .init(id: "gentle-machine", label: "Máquina suave"),
+        .init(id: "gentle-robot", label: "Robô gentil"),
+        .init(id: "cute-robot", label: "Robô fofo"),
+        .init(id: "tiny-robot", label: "Robô pequeno"),
+        .init(id: "tiny-friendly", label: "Pequeno amigável"),
+        .init(id: "futuristic", label: "Futurista"),
+        .init(id: "ai-assistant-1", label: "Assistente 1"),
+        .init(id: "ai-assistant-2", label: "Assistente 2"),
+        .init(id: popID, label: "Pop (sistema)"),
+    ]
+
+    /// O som já carregado, ou o Pop se o id não existe ou o arquivo não abre.
+    static func load(_ id: String) -> NSSound? {
+        if id != popID,
+           let url = Bundle.main.url(forResource: id, withExtension: "mp3", subdirectory: "Sounds"),
+           let sound = NSSound(contentsOf: url, byReference: true) {
+            return sound
+        }
+        return NSSound(named: "Pop")
+    }
 }
 
 /// Um aviso pequeno no canto da área de conteúdo.
@@ -75,20 +117,24 @@ final class Notices: NSObject, ObservableObject, UNUserNotificationCenterDelegat
 
     // MARK: Som
 
-    /// Som do sistema "Pop", baixo. Fica guardado: um NSSound solto para de tocar ao ser liberado.
-    private let doneSound: NSSound? = {
-        let sound = NSSound(named: "Pop")
-        sound?.volume = 0.3
-        return sound
-    }()
+    /// O som tocando agora. Fica guardado: um NSSound solto para de tocar ao ser liberado.
+    private var current: NSSound?
     private var lastSound = Date.distantPast
     private static let soundGap: TimeInterval = 3
 
-    /// Toca o som de "equipe terminou", no máximo um a cada 3s no app todo.
+    /// Toca o som de "equipe terminou" escolhido, no máximo um a cada 3s no app todo.
     func playDone() {
-        guard let sound = doneSound, Date().timeIntervalSince(lastSound) >= Self.soundGap else { return }
+        guard Date().timeIntervalSince(lastSound) >= Self.soundGap else { return }
         lastSound = Date()
-        if sound.isPlaying { sound.stop() }
+        play(NoticePrefs.soundChoice, volume: NoticePrefs.volume)
+    }
+
+    /// Toca um som já, sem o intervalo mínimo (prévia dos Ajustes).
+    func play(_ id: String, volume: Double) {
+        current?.stop()
+        guard let sound = TeamSound.load(id) else { return }
+        sound.volume = Float(volume)
+        current = sound
         sound.play()
     }
 

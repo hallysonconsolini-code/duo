@@ -15,6 +15,7 @@ cp "$BIN" "$APP/Contents/MacOS/Duo"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 [[ -f Resources/AppIcon.icns ]] || swift scripts/make-icon.swift Resources/AppIcon.icns
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp -R Resources/Sounds "$APP/Contents/Resources/Sounds"
 IDENTITY=${DUO_SIGN_IDENTITY:-"Duo Local Signing"}
 if security find-identity -p codesigning | grep -qF "\"$IDENTITY\""; then
     # Requisito do app = identificador + este certificado: igual em todo build.

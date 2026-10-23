@@ -18,6 +18,36 @@ private struct NoticeSettings: View {
     @AppStorage(NoticePrefs.enabledKey) private var enabled = true
     @AppStorage(NoticePrefs.soundKey) private var sound = true
     @AppStorage(NoticePrefs.backgroundKey) private var background = true
+    @AppStorage(NoticePrefs.soundChoiceKey) private var soundChoice = TeamSound.defaultID
+    @AppStorage(NoticePrefs.volumeKey) private var volume = NoticePrefs.defaultVolume
+
+    private var soundControls: some View {
+        HStack(spacing: 12) {
+            Text("SOM").font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.faint)
+            DuoMenuPicker(options: TeamSound.all.map { .init(value: $0.id, label: $0.label) },
+                          selection: Binding(get: { soundChoice }, set: {
+                              soundChoice = $0
+                              cockpit.notices.play($0, volume: volume)
+                          }), width: 160)
+            Button("▶") { cockpit.notices.play(soundChoice, volume: volume) }
+                .buttonStyle(.duo(.secondary))
+                .help("Ouvir")
+            Text("VOLUME").font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.faint)
+                .padding(.leading, 8)
+            SegmentedChoice(options: [0.3, 0.6, 1.0], selection: Binding(get: { Self.nearest(volume) }, set: {
+                volume = $0
+                cockpit.notices.play(soundChoice, volume: $0)
+            }), label: { $0 == 0.3 ? "baixo" : $0 == 0.6 ? "médio" : "alto" })
+        }
+        .padding(.leading, 36)
+        .disabled(!sound)
+        .opacity(sound ? 1 : 0.4)
+    }
+
+    /// O nível mais próximo do volume salvo, para o seletor marcar um deles.
+    private static func nearest(_ value: Double) -> Double {
+        [0.3, 0.6, 1.0].min { abs($0 - value) < abs($1 - value) } ?? 0.3
+    }
 
     private static let teamRule = "quando o gerente encerra o turno ou, sem gerente, quando todos os painéis param"
 
@@ -27,12 +57,13 @@ private struct NoticeSettings: View {
                       detail: "Um aviso discreto no canto da janela a cada painel que termina. Sem som.")
             DuoToggle(isOn: $sound, title: "Som quando a equipe terminar",
                       detail: "Um som baixo \(Self.teamRule). Toca mesmo com o Duo na frente.")
+            soundControls
             DuoToggle(isOn: $background, title: "Notificação do macOS quando a equipe terminar",
                       detail: "Com o Duo em segundo plano, uma notificação sem som \(Self.teamRule). Clicar nela volta para o painel.")
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 640, height: 400, alignment: .topLeading)
+        .frame(width: 640, height: 460, alignment: .topLeading)
         .background(Theme.bg)
         .onChange(of: background) { _, on in if on { cockpit.notices.requestAuthorization() } }
     }
