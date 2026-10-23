@@ -70,28 +70,37 @@ struct TeamSetupView: View {
     }
 
     private var folderSection: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                SectionLabel(text: "Pasta do projeto")
-                if let directory, let folderName {
-                    Text(folderName).font(Theme.mono(11.5, .bold)).foregroundStyle(Theme.text)
-                    Text((directory as NSString).abbreviatingWithTildeInPath)
-                        .font(Theme.mono(10)).foregroundStyle(Theme.faint)
-                        .lineLimit(1).truncationMode(.middle)
-                    if cockpit.workspace(at: directory) != nil {
-                        Text("Já aberta como workspace. A equipe será adicionada a ele.")
-                            .font(Theme.mono(10)).foregroundStyle(Theme.dim)
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "Pasta do projeto", subtitle: "onde a equipe vai trabalhar")
+            HStack(spacing: 12) {
+                Image(systemName: directory == nil ? "folder.badge.plus" : "folder.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(directory == nil ? Theme.faint : Theme.soft)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 3) {
+                    if let directory, let folderName {
+                        Text(folderName).font(Theme.mono(11.5, .bold)).foregroundStyle(Theme.text)
+                        Text((directory as NSString).abbreviatingWithTildeInPath)
+                            .font(Theme.mono(10)).foregroundStyle(Theme.faint)
+                            .lineLimit(1).truncationMode(.middle)
+                        if cockpit.workspace(at: directory) != nil {
+                            Text("Já aberta como workspace. A equipe será adicionada a ele.")
+                                .font(Theme.mono(10)).foregroundStyle(Theme.yellow.opacity(0.8))
+                        }
+                    } else {
+                        Text("Nenhuma pasta escolhida.").font(Theme.mono(11)).foregroundStyle(Theme.dim)
                     }
-                } else {
-                    Text("Nenhuma pasta escolhida.").font(Theme.mono(11)).foregroundStyle(Theme.dim)
                 }
+                Spacer(minLength: 0)
+                Button(directory == nil ? "Selecionar pasta…" : "Trocar", action: chooseFolder)
+                    .buttonStyle(.duo(directory == nil ? .primary : .secondary))
             }
-            Spacer(minLength: 0)
-            Button(directory == nil ? "Selecionar pasta…" : "Trocar", action: chooseFolder)
-                .buttonStyle(.duo(directory == nil ? .primary : .secondary))
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.bar.opacity(0.6)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.paneBorder, lineWidth: 1))
         }
         .padding(.horizontal, 16)
-        .frame(height: 64)
+        .padding(.vertical, 16)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.bar).frame(height: 1) }
     }
 
@@ -136,84 +145,126 @@ struct TeamSetupView: View {
     private var detail: some View {
         if choice == .single {
             VStack(alignment: .leading, spacing: 12) {
-                SectionLabel(text: "Conta")
+                SectionHeader(title: "Conta", subtitle: "abre um Claude Code comum, sem papel")
                 accountPicker($singleAccount)
-                Text("Abre um Claude Code comum, sem papel.")
-                    .font(Theme.mono(11)).foregroundStyle(Theme.dim)
             }
             .padding(16)
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                counters
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .overlay(alignment: .bottom) { Rectangle().fill(Theme.bar).frame(height: 1) }
-                if slots.isEmpty {
-                    Text("Adicione papéis com o +.")
-                        .font(Theme.mono(11)).foregroundStyle(Theme.dim)
-                        .padding(16)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            ForEach(Array(slots.enumerated()), id: \.element.id) { index, _ in
-                                memberRow(index)
-                            }
-                        }
-                        .padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Composição", subtitle: "quantos membros de cada papel")
+                    composition
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    SectionHeader(title: "Membros", subtitle: "conta, modelo e esforço de cada painel") {
+                        Text("\(slots.count) \(slots.count == 1 ? "painel" : "painéis")")
+                            .font(Theme.mono(10)).foregroundStyle(Theme.dim)
+                    }
+                    members
+                    if slots.filter({ $0.role.isDev }).count >= 2 {
+                        Text("Cada dev trabalha numa cópia isolada do repositório (git worktree) em .claude/worktrees/. O gerente junta as branches.")
+                            .font(Theme.mono(10)).foregroundStyle(Theme.faint)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer(minLength: 0)
-                if slots.filter({ $0.role.isDev }).count >= 2 {
-                    Text("Cada dev trabalha numa cópia isolada do repositório (git worktree) em .claude/worktrees/. O gerente junta as branches.")
-                        .font(Theme.mono(10)).foregroundStyle(Theme.faint)
-                        .padding(.horizontal, 16).padding(.bottom, 10)
-                }
+            }
+            .padding(16)
+        }
+    }
+
+    private var composition: some View {
+        HStack(spacing: 10) {
+            ForEach(TeamRole.allCases) { role in
+                RoleCard(role: role, count: slots.filter { $0.role == role }.count,
+                         decrement: { removeLast(role) }, increment: { add(role) })
             }
         }
     }
 
-    private var counters: some View {
-        HStack(spacing: 12) {
-            ForEach(TeamRole.allCases) { role in
-                let n = slots.filter { $0.role == role }.count
-                HStack(spacing: 6) {
-                    Text(role.short).font(Theme.mono(10.5, .bold)).foregroundStyle(role.color)
-                    CountStepper(value: n, tint: role.color, help: role.short,
-                                 decrement: { removeLast(role) }, increment: { add(role) })
+    @ViewBuilder
+    private var members: some View {
+        if slots.isEmpty {
+            Text("Nenhum membro. Adicione papéis com o + nos cards acima.")
+                .font(Theme.mono(11)).foregroundStyle(Theme.dim)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.paneBorder, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+        } else {
+            VStack(spacing: 0) {
+                memberColumns
+                ForEach(Array(slots.enumerated()), id: \.element.id) { index, _ in
+                    Rectangle().fill(Theme.paneBorder.opacity(0.6)).frame(height: 1)
+                    memberRow(index)
                 }
             }
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.bar.opacity(0.4)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.paneBorder, lineWidth: 1))
+        }
+    }
+
+    private enum Column {
+        static let pane: CGFloat = 24
+        static let role: CGFloat = 104
+        static let account: CGFloat = 104
+        static let model: CGFloat = 144
+        static let effort: CGFloat = 136
+        static let spacing: CGFloat = 8
+    }
+
+    private var memberColumns: some View {
+        HStack(spacing: Column.spacing) {
+            columnTitle("", Column.pane)
+            columnTitle("papel", Column.role)
+            columnTitle("conta", Column.account)
+            columnTitle("modelo", Column.model)
+            columnTitle("esforço", Column.effort)
             Spacer(minLength: 0)
         }
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+    }
+
+    private func columnTitle(_ text: String, _ width: CGFloat) -> some View {
+        Text(text.uppercased())
+            .font(Theme.mono(9, .bold)).tracking(1.2).foregroundStyle(Theme.faint)
+            .frame(width: width, alignment: .leading)
     }
 
     private func memberRow(_ index: Int) -> some View {
         let slot = slots[index]
-        return HStack(spacing: 10) {
+        return HStack(spacing: Column.spacing) {
             Text("p\(existingCount + index + 1)")
-                .font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: 26, alignment: .leading)
-            Text(slot.role.title)
-                .font(Theme.mono(11.5, .bold)).foregroundStyle(slot.role.color)
-                .frame(width: 88, alignment: .leading)
+                .font(Theme.mono(11)).foregroundStyle(Theme.faint).frame(width: Column.pane, alignment: .leading)
+            HStack(spacing: 6) {
+                RoleIcon(role: slot.role, size: 12)
+                Text(slot.role.title)
+                    .font(Theme.mono(11.5, .bold)).foregroundStyle(slot.role.color)
+                    .lineLimit(1)
+            }
+            .frame(width: Column.role, alignment: .leading)
             accountPicker(Binding(get: { slots[index].accountID }, set: { slots[index].accountID = $0 }))
+                .frame(width: Column.account, alignment: .leading)
             SegmentedChoice(options: AIModel.allCases,
                             selection: Binding(get: { slots[index].model }, set: { slots[index].model = $0; edited() }),
                             label: { $0.rawValue }, tint: slot.role.color)
+                .frame(width: Column.model, alignment: .leading)
             SegmentedChoice(options: Effort.allCases,
                             selection: Binding(get: { slots[index].effort }, set: { slots[index].effort = $0; edited() }),
                             label: { $0.label }, tint: slot.role.color)
+                .frame(width: Column.effort, alignment: .leading)
             Spacer(minLength: 0)
             GlyphButton(glyph: "×", help: "Remover", size: 11) {
                 slots.remove(at: index)
                 edited()
             }
         }
-        .padding(.horizontal, 16)
-        .frame(height: 38)
+        .padding(.horizontal, 12)
+        .frame(height: 40)
     }
 
     private func accountPicker(_ binding: Binding<UUID?>) -> some View {
         DuoMenuPicker(options: accounts.accounts.map { .init(value: Optional($0.id), label: $0.name, color: $0.color) },
-                      selection: binding, width: 110)
+                      selection: binding, width: 104)
     }
 
     private var footer: some View {
@@ -317,5 +368,96 @@ struct TeamSetupView: View {
         let template = teams.saveTemplate(name: name, slots: slots)
         savingName = nil
         choice = .template(template.id)
+    }
+}
+
+// MARK: Papéis: ícone e card
+
+extension TeamRole {
+    /// SF Symbol do papel. Sênior e júnior usam o mesmo, com selo SR/JR (RoleIcon).
+    var symbol: String {
+        switch self {
+        case .manager: "list.bullet.clipboard"
+        case .seniorDev, .juniorDev: "chevron.left.forwardslash.chevron.right"
+        case .designer: "paintpalette"
+        case .qa: "checkmark.seal"
+        }
+    }
+
+    /// O que o papel faz, numa linha.
+    var blurb: String {
+        switch self {
+        case .manager: "planeja e revisa"
+        case .seniorDev: "código complexo"
+        case .juniorDev: "tarefas simples"
+        case .designer: "Figma e UI"
+        case .qa: "testa entregas"
+        }
+    }
+}
+
+/// Ícone do papel na cor dele. Devs ganham um selo SR/JR no canto.
+struct RoleIcon: View {
+    let role: TeamRole
+    var size: CGFloat = 20
+    var lit = true
+
+    var body: some View {
+        let color = lit ? role.color : role.color.opacity(0.35)
+        Image(systemName: role.symbol)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: size * 1.5, height: size * 1.2)
+            .overlay(alignment: .bottomTrailing) {
+                if role.isDev, size >= 16 {
+                    Text(role == .seniorDev ? "SR" : "JR")
+                        .font(Theme.mono(size * 0.38, .bold))
+                        .foregroundStyle(Theme.bg)
+                        .padding(.horizontal, 3)
+                        .background(Capsule().fill(color))
+                        .offset(x: size * 0.25, y: size * 0.25)
+                }
+            }
+    }
+}
+
+/// Card de um papel na composição da equipe: ícone, nome, o que faz, modelo padrão e o contador.
+/// Apagado com 0 membros, aceso na cor do papel com 1 ou mais.
+private struct RoleCard: View {
+    let role: TeamRole
+    let count: Int
+    let decrement: () -> Void
+    let increment: () -> Void
+
+    var body: some View {
+        let lit = count > 0
+        VStack(spacing: 6) {
+            RoleIcon(role: role, size: 22, lit: lit)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
+            Text(role.title)
+                .font(Theme.mono(11.5, .bold))
+                .foregroundStyle(lit ? Theme.text : Theme.dim)
+                .lineLimit(1)
+            Text(role.blurb)
+                .font(Theme.mono(10))
+                .foregroundStyle(lit ? Theme.soft : Theme.faint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text("\(role.defaultModel.rawValue) · \(role.defaultEffort.label)")
+                .font(Theme.mono(9.5))
+                .foregroundStyle(Theme.faint)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            CountStepper(value: count, tint: role.color, help: role.short,
+                         decrement: decrement, increment: increment)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .frame(height: 148)
+        .background(RoundedRectangle(cornerRadius: 10).fill(lit ? role.color.opacity(0.07) : Theme.bar.opacity(0.4)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(lit ? role.color.opacity(0.4) : Theme.paneBorder, lineWidth: 1))
+        .animation(.easeOut(duration: 0.15), value: lit)
     }
 }

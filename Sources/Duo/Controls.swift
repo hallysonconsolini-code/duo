@@ -293,3 +293,31 @@ extension View {
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.paneBorder, lineWidth: 1))
     }
 }
+
+// MARK: Título de seção
+
+/// Título de seção legível: nome, uma linha de ajuda opcional e algo à direita (contagem, botão).
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String?
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(Theme.mono(12, .bold)).foregroundStyle(Theme.text)
+                if let subtitle {
+                    Text(subtitle).font(Theme.mono(10)).foregroundStyle(Theme.dim)
+                }
+            }
+            Spacer(minLength: 0)
+            trailing()
+        }
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
