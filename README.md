@@ -40,8 +40,8 @@ dele para outro painel.
 Requer macOS 14+ e as Command Line Tools (Xcode não é necessário).
 
 ```bash
-./scripts/build-app.sh
-open build/Duo.app
+./scripts/install.sh     # compila e instala/atualiza em /Applications (fecha e reabre o Duo)
+./scripts/make-dmg.sh    # gera build/Duo-<versão>.dmg para instalar em outro Mac
 ```
 
 ## Como funciona
