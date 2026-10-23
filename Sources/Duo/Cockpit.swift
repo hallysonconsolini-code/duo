@@ -180,6 +180,7 @@ final class Cockpit: ObservableObject {
 
     func selectWorkspace(_ id: UUID) {
         workspaces.selectedID = id
+        teamSetup = nil
         zoomed = false
         focusedPane = workspaces.selected?.panes.first?.id
     }

@@ -22,14 +22,14 @@ struct CockpitView: View {
         .background(WindowChrome())
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        .sheet(item: $cockpit.teamSetup) { request in
-            TeamSetupView(request: request)
-        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if let ws = workspaces.selected {
+        if let request = cockpit.teamSetup {
+            TeamSetupView(request: request)
+                .id(request.id)
+        } else if let ws = workspaces.selected {
             if ws.panes.isEmpty {
                 EmptyWorkspace(workspace: ws)
             } else {

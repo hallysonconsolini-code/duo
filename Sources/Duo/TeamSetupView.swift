@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Sheet de nova equipe: escolher a pasta do projeto e um painel só, um template de equipe
+/// Tela de nova equipe, na área central: escolher a pasta do projeto e um painel só, um template de equipe
 /// ou uma equipe montada, com conta, modelo e esforço de cada membro. Pasta e equipe em
 /// qualquer ordem. Ao adicionar equipe a um workspace existente, a pasta é a dele.
 struct TeamSetupView: View {
@@ -29,19 +29,23 @@ struct TeamSetupView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if isNew { folderSection }
-            HStack(alignment: .top, spacing: 0) {
-                templateList
-                    .frame(width: 200)
-                Rectangle().fill(Theme.bar).frame(width: 1)
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if isNew { folderSection }
+                HStack(alignment: .top, spacing: 0) {
+                    templateList
+                        .frame(width: 200)
+                    Rectangle().fill(Theme.bar).frame(width: 1)
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .frame(minHeight: 400)
+                footer
             }
-            footer
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 760, height: isNew ? 584 : 520)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
         .onAppear {
