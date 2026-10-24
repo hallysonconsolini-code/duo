@@ -68,10 +68,12 @@ struct DuoApp: App {
             CommandMenu("Painel") {
                 Button(cockpit.zoomed ? "Sair do zoom" : "Zoom no painel") { cockpit.zoomed.toggle() }
                     .keyboardShortcut(.return, modifiers: .command)
-                Button("Aumentar painel") { cockpit.resizeFocusedPane(bigger: true) }
+                Button("Dividir à direita") { cockpit.splitFocusedPane(.right) }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Dividir abaixo") { cockpit.splitFocusedPane(.bottom) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Equilibrar painéis") { cockpit.balanceLayout() }
                     .keyboardShortcut("=", modifiers: [.command, .control])
-                Button("Diminuir painel") { cockpit.resizeFocusedPane(bigger: false) }
-                    .keyboardShortcut("-", modifiers: [.command, .control])
                 Button(cockpit.sidebarVisible ? "Esconder barra lateral" : "Mostrar barra lateral") {
                     cockpit.sidebarVisible.toggle()
                 }

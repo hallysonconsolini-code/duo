@@ -248,9 +248,12 @@ final class Cockpit: ObservableObject {
         return list[(i + 1) % list.count].id
     }
 
+    /// `edge`: de que lado do painel dividido o novo entra (nil = eixo mais longo). O painel
+    /// dividido é o em foco, se estiver neste workspace; senão, o maior.
     @discardableResult
     func addPane(kind: PaneSpec.Kind, accountID: UUID?, in workspaceID: UUID? = nil,
-                 prompt: String? = nil, focus: Bool = true, askRole: Bool = false) -> PaneSpec? {
+                 prompt: String? = nil, focus: Bool = true, askRole: Bool = false,
+                 edge: SplitNode.Edge? = nil) -> PaneSpec? {
         guard let accountID = accountID ?? accounts.accounts.first?.id,
               let wsID = workspaceID ?? workspaces.selectedID,
               let ws = workspaces.workspaces.first(where: { $0.id == wsID }) else { return nil }
@@ -267,7 +270,12 @@ final class Cockpit: ObservableObject {
         var pane = PaneSpec(kind: kind, name: ws.nextPaneName(), accountID: accountID, directory: ws.directory)
         // Com askRole, o painel aparece em "escolher papel" e o claude só inicia em chooseRole.
         if kind == .claude, askRole { pane.awaitingRole = true }
-        workspaces.update(wsID) { $0.panes.append(pane) }
+        let target = focusedPane
+        let bounds = workspaces.layoutBounds
+        workspaces.update(wsID) { ws in
+            ws.panes.append(pane)
+            ws.insertInLayout(pane.id, splitting: target, edge: edge, bounds: bounds)
+        }
         if kind == .claude, !pane.isAwaitingRole { launch(pane, prompt: prompt) }
         if focus {
             if workspaces.selectedID != wsID { workspaces.selectedID = wsID }
@@ -297,15 +305,31 @@ final class Cockpit: ObservableObject {
         }
     }
 
-    /// Muda quantas células do grid o painel ocupa. Só o frame muda: o terminal continua o mesmo.
-    func setSize(_ size: PaneSize, for paneID: UUID) {
-        workspaces.updatePane(paneID) { $0.size = size }
+    // MARK: Layout
+
+    /// Novo painel (escolhendo o papel, como o ⌘T) dividindo o painel em foco para o lado `edge`.
+    func splitFocusedPane(_ edge: SplitNode.Edge) {
+        guard workspaces.selected != nil, teamSetup == nil else { return }
+        addPane(kind: .claude, accountID: focusedAccountID, askRole: true, edge: edge)
     }
 
-    /// Atalho de aumentar/diminuir o painel em foco: 1×1 ↔ 2×1 ↔ 2×2.
-    func resizeFocusedPane(bigger: Bool) {
-        guard let id = focusedPane, let pane = workspaces.pane(id) else { return }
-        setSize(bigger ? pane.size.bigger : pane.size.smaller, for: id)
+    /// Partes iguais em todas as divisões do workspace atual.
+    func balanceLayout() {
+        guard let id = workspaces.selectedID else { return }
+        workspaces.update(id) { $0.layout = $0.layout?.balanced() }
+    }
+
+    /// Grava o layout depois de arrastar uma divisória. Só o frame dos painéis muda.
+    func setLayout(_ layout: SplitNode, in workspaceID: UUID) {
+        workspaces.update(workspaceID) { $0.layout = layout }
+    }
+
+    /// Tira o painel de onde está e o põe no lado `edge` de `target`.
+    func movePane(_ id: UUID, to edge: SplitNode.Edge, of target: UUID) {
+        guard let ws = workspaces.workspace(containing: id), ws.panes.contains(where: { $0.id == target }) else { return }
+        workspaces.update(ws.id) { $0.layout = $0.layout?.moving(id, to: edge, of: target) }
+        focusedPane = id
+        focusViewOfFocusedPane()
     }
 
     func closeFocusedPane() {
@@ -336,7 +360,26 @@ final class Cockpit: ObservableObject {
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
     }
 
+    /// Área dos painéis (a view marca onde fica). Arrastar ali não move a janela: a barra do
+    /// painel arrasta o painel, e as divisórias redimensionam.
+    weak var paneArea: NSView?
+    /// Janela em que o arrasto pelo fundo foi desligado (clique na área dos painéis).
+    private weak var unmovableWindow: NSWindow?
+
     private func focusPane(at event: NSEvent) {
+        if let window = event.window {
+            var inside = false
+            if let area = paneArea, area.window === window, !area.isHiddenOrHasHiddenAncestor {
+                inside = area.bounds.contains(area.convert(event.locationInWindow, from: nil))
+            }
+            if inside, window.isMovableByWindowBackground {
+                window.isMovableByWindowBackground = false
+                unmovableWindow = window
+            } else if !inside, unmovableWindow === window {
+                window.isMovableByWindowBackground = true
+                unmovableWindow = nil
+            }
+        }
         guard let panes = workspaces.selected?.panes else { return }
         for pane in panes {
             guard let view = view(for: pane), view.window === event.window, !view.isHiddenOrHasHiddenAncestor else { continue }
