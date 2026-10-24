@@ -74,6 +74,10 @@ struct DuoApp: App {
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Equilibrar painéis") { cockpit.balanceLayout() }
                     .keyboardShortcut("=", modifiers: [.command, .control])
+                Button(cockpit.sidebarVisible ? "Esconder barra lateral" : "Mostrar barra lateral") {
+                    cockpit.sidebarVisible.toggle()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
                 Divider()
                 ForEach(1..<10) { n in
                     Button("Ir para painel \(n)") { cockpit.focusPane(number: n) }

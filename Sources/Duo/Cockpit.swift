@@ -12,6 +12,10 @@ final class Cockpit: ObservableObject {
         didSet { if focusedPane != oldValue { focusViewOfFocusedPane() } }
     }
     @Published var zoomed = false
+    /// Barra lateral da esquerda visível; lembrado entre aberturas.
+    @Published var sidebarVisible = UserDefaults.standard.object(forKey: "sidebarVisible") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(sidebarVisible, forKey: "sidebarVisible") }
+    }
     /// Pasta aguardando a escolha de equipe (abre a sheet de equipe).
     @Published var teamSetup: TeamSetupRequest?
     @Published private(set) var isReady = false

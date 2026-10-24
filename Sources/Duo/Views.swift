@@ -10,14 +10,17 @@ struct CockpitView: View {
             TitleBar()
             WorkspaceTabs()
             HStack(spacing: 0) {
-                Sidebar()
-                    .frame(width: 176)
-                Rectangle().fill(Theme.bar).frame(width: 1)
+                if cockpit.sidebarVisible {
+                    Sidebar()
+                        .frame(width: 176)
+                    Rectangle().fill(Theme.bar).frame(width: 1)
+                }
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottomTrailing) { NoticeStack(notices: cockpit.notices) }
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: cockpit.sidebarVisible)
         .frame(minWidth: 900, minHeight: 560)
         .background(Theme.bg)
         .background(WindowChrome())
@@ -50,6 +53,7 @@ private struct TitleBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            SidebarToggle()
             Text("Duo").font(Theme.mono(12, .semibold)).foregroundStyle(Theme.text)
             Text(Updater.currentVersion).font(Theme.mono(11)).foregroundStyle(Theme.dim)
             if let release = updater.available {
@@ -64,6 +68,7 @@ private struct TitleBar: View {
             HStack(spacing: 14) {
                 hint("⌘T", "novo painel")
                 hint("⇧⌘T", "outra conta")
+                hint("⌘D", "dividir")
                 hint("⌘↩", "zoom")
             }
         }
@@ -79,6 +84,24 @@ private struct TitleBar: View {
             Text(label).foregroundStyle(Theme.faint)
         }
         .font(Theme.mono(10))
+    }
+}
+
+private struct SidebarToggle: View {
+    @EnvironmentObject var cockpit: Cockpit
+    @State private var hover = false
+
+    var body: some View {
+        Button { cockpit.sidebarVisible.toggle() } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 12))
+                .foregroundStyle(hover ? Theme.text : Theme.faint)
+                .frame(minWidth: 18, minHeight: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Mostrar/Esconder barra lateral (⌃⌘S)")
     }
 }
 
