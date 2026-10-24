@@ -65,12 +65,6 @@ struct DuoApp: App {
                 Button("Fechar painel") { cockpit.closeFocusedPane() }
                     .keyboardShortcut("w", modifiers: .command)
             }
-            CommandGroup(after: .toolbar) {
-                Button(cockpit.sidebarVisible ? "Esconder barra lateral" : "Mostrar barra lateral") {
-                    cockpit.sidebarVisible.toggle()
-                }
-                .keyboardShortcut("s", modifiers: [.command, .control])
-            }
             CommandMenu("Painel") {
                 Button(cockpit.zoomed ? "Sair do zoom" : "Zoom no painel") { cockpit.zoomed.toggle() }
                     .keyboardShortcut(.return, modifiers: .command)
@@ -78,6 +72,10 @@ struct DuoApp: App {
                     .keyboardShortcut("=", modifiers: [.command, .control])
                 Button("Diminuir painel") { cockpit.resizeFocusedPane(bigger: false) }
                     .keyboardShortcut("-", modifiers: [.command, .control])
+                Button(cockpit.sidebarVisible ? "Esconder barra lateral" : "Mostrar barra lateral") {
+                    cockpit.sidebarVisible.toggle()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
                 Divider()
                 ForEach(1..<10) { n in
                     Button("Ir para painel \(n)") { cockpit.focusPane(number: n) }

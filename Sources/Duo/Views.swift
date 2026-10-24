@@ -53,8 +53,8 @@ private struct TitleBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("Duo").font(Theme.mono(12, .semibold)).foregroundStyle(Theme.text)
             SidebarToggle()
+            Text("Duo").font(Theme.mono(12, .semibold)).foregroundStyle(Theme.text)
             Text(Updater.currentVersion).font(Theme.mono(11)).foregroundStyle(Theme.dim)
             if let release = updater.available {
                 Button { updater.promptToUpdate(release) } label: {
