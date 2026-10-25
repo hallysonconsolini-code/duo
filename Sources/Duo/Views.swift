@@ -65,6 +65,8 @@ private struct TitleBar: View {
                 .help("Atualizar o Duo")
             }
             Spacer()
+            LayoutButton()
+                .padding(.trailing, 4)
             HStack(spacing: 14) {
                 hint("⌘T", "novo painel")
                 hint("⇧⌘T", "outra conta")
@@ -489,6 +491,11 @@ private struct PaneGrid: View {
                 }
                 if let move {
                     dropPreview(move, zones: zones, zoneFrames: zoneFrames, frames: frames)
+                    ShiftHint(active: move.shift)
+                        .frame(width: ShiftHintView.size.width, height: ShiftHintView.size.height)
+                        .position(x: geo.size.width / 2, y: SplitNode.padding + PaneChrome.height / 2)
+                        .allowsHitTesting(false)
+                        .zIndex(5)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
@@ -580,8 +587,15 @@ private struct PaneGrid: View {
                           zoneFrames: [UUID: CGRect], frames: [UUID: CGRect]) {
         guard zoomedID == nil, let pane = workspace.panes.first(where: { $0.id == id }) else { move = nil; return }
         var next = PaneMove(pane: id)
+        next.shift = shift
         let zoneUnder = zoneFrames.first { $0.value.contains(location) }?.key
-        if let other = frames.first(where: { $0.key != id && $0.value.contains(location) })?.key,
+        if shift, let zoneUnder, let rect = zoneFrames[zoneUnder] {
+            // Shift: a borda da zona mais próxima do mouse ganha uma zona nova.
+            let dx = (location.x - rect.minX) / max(rect.width, 1)
+            let dy = (location.y - rect.minY) / max(rect.height, 1)
+            let distances: [(SplitNode.Edge, CGFloat)] = [(.left, dx), (.right, 1 - dx), (.top, dy), (.bottom, 1 - dy)]
+            next.newZone = (zoneUnder, distances.min { $0.1 < $1.1 }!.0)
+        } else if let other = frames.first(where: { $0.key != id && $0.value.contains(location) })?.key,
            workspace.panes.first(where: { $0.id == other })?.zone == pane.zone {
             next.swap = other
         } else if let zoneUnder, zoneUnder != pane.zone {
@@ -589,7 +603,9 @@ private struct PaneGrid: View {
         }
         if ended {
             move = nil
-            if let swap = next.swap {
+            if let target = next.newZone {
+                cockpit.movePane(id, toNewZoneAt: target.edge, of: target.zone)
+            } else if let swap = next.swap {
                 cockpit.swapPanes(id, swap)
             } else if let zone = next.zone {
                 cockpit.movePane(id, toZone: zone)
@@ -607,6 +623,52 @@ private struct PaneGrid: View {
         case .top: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height / 2)
         case .bottom: CGRect(x: rect.minX, y: rect.midY, width: rect.width, height: rect.height / 2)
         }
+    }
+}
+
+/// Aviso durante o arrasto pela barra: com Shift, soltar na borda de uma zona cria uma zona
+/// nova ali. Aceso quando o Shift está apertado. NSView para ficar acima dos terminais.
+private struct ShiftHint: NSViewRepresentable {
+    let active: Bool
+
+    func makeNSView(context: Context) -> ShiftHintView { ShiftHintView() }
+
+    func updateNSView(_ view: ShiftHintView, context: Context) {
+        if view.active != active { view.active = active }
+    }
+}
+
+final class ShiftHintView: NSView {
+    static let size = CGSize(width: 150, height: 24)
+
+    var active = false { didSet { update() } }
+    private let label = NSTextField(labelWithString: "⇧ Shift: nova zona")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        label.font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        update()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) não usado") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func update() {
+        let accent = NSColor(Theme.accent)
+        layer?.backgroundColor = (active ? accent.withAlphaComponent(0.9) : Theme.nsBg.withAlphaComponent(0.92)).cgColor
+        layer?.borderColor = (active ? accent : Theme.nsText.withAlphaComponent(0.25)).cgColor
+        label.textColor = active ? .white : Theme.nsText.withAlphaComponent(0.7)
     }
 }
 

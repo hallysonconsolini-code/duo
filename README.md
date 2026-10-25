@@ -9,7 +9,9 @@ que eles conversem entre si.
   dela em grid automático. Escolha um modelo de zonas em Painel > Layout (Automático, colunas,
   principal + 2, foco central, 2×2…). ⌘T abre um painel novo na zona com menos painéis. Arraste
   a barra de um painel para levá-lo a outra zona, ou sobre um painel da mesma zona para os dois
-  trocarem de lugar. As divisórias entre zonas arrastam livremente (duplo clique equilibra).
+  trocarem de lugar; com Shift, soltar na borda de uma zona cria uma zona nova ali. As
+  divisórias entre zonas arrastam livremente (duplo clique equilibra). O botão de layout na barra
+  de título mostra os modelos em miniatura e salva o layout atual como modelo (layouts.json).
 - **Contas separadas**: cada conta usa seu próprio `CLAUDE_CONFIG_DIR` (login, histórico, config)
   e seu próprio armazenamento de cookies no claude.ai. Por padrão, a Conta 1 usa o `~/.claude`.
 - **Painéis que conversam**: o app sobe um servidor MCP local (`duo`) que todo painel recebe

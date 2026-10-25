@@ -300,8 +300,11 @@ final class Cockpit: ObservableObject {
 
     // MARK: Zonas
 
-    /// Modelos de zonas que dá para aplicar.
-    var zoneTemplates: [ZoneTemplate] { ZoneTemplate.builtIn }
+    /// Modelos de zonas salvos pelo usuário (layouts.json).
+    let layouts = LayoutStore()
+
+    /// Modelos de zonas que dá para aplicar: os prontos e os salvos.
+    var zoneTemplates: [ZoneTemplate] { layouts.all }
 
     /// Troca as zonas do workspace atual pelas de um modelo. Só os frames mudam: os
     /// terminais continuam os mesmos.
