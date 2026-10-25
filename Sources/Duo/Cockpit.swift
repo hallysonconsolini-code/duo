@@ -248,12 +248,10 @@ final class Cockpit: ObservableObject {
         return list[(i + 1) % list.count].id
     }
 
-    /// `edge`: de que lado do painel dividido o novo entra (nil = eixo mais longo). O painel
-    /// dividido é o em foco, se estiver neste workspace; senão, o maior.
+    /// O painel novo entra no fim do grid.
     @discardableResult
     func addPane(kind: PaneSpec.Kind, accountID: UUID?, in workspaceID: UUID? = nil,
-                 prompt: String? = nil, focus: Bool = true, askRole: Bool = false,
-                 edge: SplitNode.Edge? = nil) -> PaneSpec? {
+                 prompt: String? = nil, focus: Bool = true, askRole: Bool = false) -> PaneSpec? {
         guard let accountID = accountID ?? accounts.accounts.first?.id,
               let wsID = workspaceID ?? workspaces.selectedID,
               let ws = workspaces.workspaces.first(where: { $0.id == wsID }) else { return nil }
@@ -270,12 +268,7 @@ final class Cockpit: ObservableObject {
         var pane = PaneSpec(kind: kind, name: ws.nextPaneName(), accountID: accountID, directory: ws.directory)
         // Com askRole, o painel aparece em "escolher papel" e o claude só inicia em chooseRole.
         if kind == .claude, askRole { pane.awaitingRole = true }
-        let target = focusedPane
-        let bounds = workspaces.layoutBounds
-        workspaces.update(wsID) { ws in
-            ws.panes.append(pane)
-            ws.insertInLayout(pane.id, splitting: target, edge: edge, bounds: bounds)
-        }
+        workspaces.update(wsID) { $0.panes.append(pane) }
         if kind == .claude, !pane.isAwaitingRole { launch(pane, prompt: prompt) }
         if focus {
             if workspaces.selectedID != wsID { workspaces.selectedID = wsID }
@@ -305,30 +298,71 @@ final class Cockpit: ObservableObject {
         }
     }
 
-    // MARK: Layout
+    // MARK: Tamanho e lugar no grid
 
-    /// Novo painel (escolhendo o papel, como o ⌘T) dividindo o painel em foco para o lado `edge`.
-    func splitFocusedPane(_ edge: SplitNode.Edge) {
-        guard workspaces.selected != nil, teamSetup == nil else { return }
-        addPane(kind: .claude, accountID: focusedAccountID, askRole: true, edge: edge)
+    /// Muda quantas células o painel ocupa. Só o frame muda: o terminal continua o mesmo.
+    func setSpan(cols: Int, rows: Int, for paneID: UUID) {
+        workspaces.updatePane(paneID) {
+            $0.colSpan = PaneSpec.clampSpan(cols)
+            $0.rowSpan = PaneSpec.clampSpan(rows)
+        }
     }
 
-    /// Partes iguais em todas as divisões do workspace atual.
-    func balanceLayout() {
+    /// Atalho de aumentar/diminuir o painel em foco, uma célula por vez, alternando largura e
+    /// altura: 1×1 → 2×1 → 2×2 → 3×2 → 3×3... A largura para no número de colunas do grid.
+    func resizeFocusedPane(bigger: Bool) {
+        guard let id = focusedPane, let pane = workspaces.pane(id),
+              let ws = workspaces.workspace(containing: id) else { return }
+        let columns = GridLayout.columns(for: ws.panes.count)
+        var cols = min(pane.colSpan, columns), rows = pane.rowSpan
+        if bigger {
+            if cols <= rows, cols < columns { cols += 1 } else { rows += 1 }
+        } else {
+            if rows >= cols, rows > 1 { rows -= 1 } else if cols > 1 { cols -= 1 } else { return }
+        }
+        setSpan(cols: cols, rows: min(rows, PaneSpec.maxSpan), for: id)
+    }
+
+    /// Volta o painel em foco a uma célula.
+    func normalSizeFocusedPane() {
+        guard let id = focusedPane else { return }
+        setSpan(cols: 1, rows: 1, for: id)
+    }
+
+    /// Todos os painéis do workspace atual com uma célula, na ordem em que estão.
+    func reorganizePanes() {
         guard let id = workspaces.selectedID else { return }
-        workspaces.update(id) { $0.layout = $0.layout?.balanced() }
+        workspaces.update(id) { ws in
+            for i in ws.panes.indices {
+                ws.panes[i].colSpan = 1
+                ws.panes[i].rowSpan = 1
+            }
+        }
     }
 
-    /// Grava o layout depois de arrastar uma divisória. Só o frame dos painéis muda.
-    func setLayout(_ layout: SplitNode, in workspaceID: UUID) {
-        workspaces.update(workspaceID) { $0.layout = layout }
+    /// Resultado de arrastar a borda de um painel: nova ordem dos painéis e o span de cada um.
+    func applyGrid(order: [UUID], spans: [UUID: GridLayout.Span], in workspaceID: UUID) {
+        workspaces.update(workspaceID) { ws in
+            guard Set(order) == Set(ws.panes.map(\.id)) else { return }
+            let byID = Dictionary(uniqueKeysWithValues: ws.panes.map { ($0.id, $0) })
+            ws.panes = order.compactMap { id in
+                guard var pane = byID[id] else { return nil }
+                if let span = spans[id] {
+                    pane.colSpan = PaneSpec.clampSpan(span.col)
+                    pane.rowSpan = PaneSpec.clampSpan(span.row)
+                }
+                return pane
+            }
+        }
     }
 
-    /// Tira o painel de onde está e o põe no lado `edge` de `target`.
-    func movePane(_ id: UUID, to edge: SplitNode.Edge, of target: UUID) {
-        guard let ws = workspaces.workspace(containing: id), ws.panes.contains(where: { $0.id == target }) else { return }
-        workspaces.update(ws.id) { $0.layout = $0.layout?.moving(id, to: edge, of: target) }
-        focusedPane = id
+    /// Troca dois painéis de lugar na ordem do grid (cada um leva o próprio tamanho).
+    func swapPanes(_ a: UUID, _ b: UUID) {
+        guard a != b, let ws = workspaces.workspace(containing: a),
+              let i = ws.panes.firstIndex(where: { $0.id == a }),
+              let j = ws.panes.firstIndex(where: { $0.id == b }) else { return }
+        workspaces.update(ws.id) { $0.panes.swapAt(i, j) }
+        focusedPane = a
         focusViewOfFocusedPane()
     }
 
@@ -361,7 +395,7 @@ final class Cockpit: ObservableObject {
     }
 
     /// Área dos painéis (a view marca onde fica). Arrastar ali não move a janela: a barra do
-    /// painel arrasta o painel, e as divisórias redimensionam.
+    /// painel arrasta o painel, e as bordas redimensionam.
     weak var paneArea: NSView?
     /// Janela em que o arrasto pelo fundo foi desligado (clique na área dos painéis).
     private weak var unmovableWindow: NSWindow?
