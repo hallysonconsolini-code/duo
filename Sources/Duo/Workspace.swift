@@ -29,6 +29,11 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     /// Painel aberto pelo ⌘T esperando a escolha de papel; o claude ainda não iniciou.
     /// Não sobrevive a reabrir o app (é descartado ao carregar).
     var awaitingRole: Bool?
+    /// Quantas colunas e linhas do grid o painel ocupa. Arquivos antigos não têm: 1.
+    /// Um span maior que o grid é limitado ao que cabe na hora de montar (o valor salvo não muda).
+    var colSpan = 1
+    var rowSpan = 1
+
     var isAwaitingRole: Bool { awaitingRole == true }
 
     /// Só dá para retomar uma sessão que já tem conversa gravada em disco.
@@ -39,34 +44,42 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     }
 }
 
-/// Um projeto: uma pasta e os painéis que trabalham nela.
+extension PaneSpec {
+    // Decodificação escrita à mão só para que colSpan e rowSpan tenham padrão 1
+    // quando faltam (workspaces.json de versões anteriores). A codificação continua sintetizada.
+    // O campo `layout` gravado pela 0.3.6 (árvore de divisões) é ignorado.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        name = try c.decode(String.self, forKey: .name)
+        accountID = try c.decode(UUID.self, forKey: .accountID)
+        directory = try c.decode(String.self, forKey: .directory)
+        claudeSessionID = try c.decodeIfPresent(String.self, forKey: .claudeSessionID)
+        claudeTranscriptPath = try c.decodeIfPresent(String.self, forKey: .claudeTranscriptPath)
+        role = try c.decodeIfPresent(RoleID.self, forKey: .role)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        effort = try c.decodeIfPresent(String.self, forKey: .effort)
+        systemPrompt = try c.decodeIfPresent(String.self, forKey: .systemPrompt)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        awaitingRole = try c.decodeIfPresent(Bool.self, forKey: .awaitingRole)
+        colSpan = Self.clampSpan(try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 1)
+        rowSpan = Self.clampSpan(try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 1)
+    }
+}
+
+extension PaneSpec {
+    static let maxSpan = 12
+
+    static func clampSpan(_ span: Int) -> Int { min(max(span, 1), maxSpan) }
+}
+
+/// Um projeto: uma pasta e o grid de painéis que trabalham nela.
 struct Workspace: Codable, Identifiable, Equatable {
     var id = UUID()
     var name: String
     var directory: String
     var panes: [PaneSpec] = []
-    /// Como os painéis dividem a tela. Workspaces salvos por versões antigas não têm:
-    /// ganham uma grade equilibrada ao carregar. Sempre com os mesmos painéis de `panes`.
-    var layout: SplitNode?
-
-    /// Põe o layout de acordo com `panes` (tira quem saiu, encaixa quem chegou).
-    mutating func syncLayout(bounds: CGSize) {
-        layout = SplitNode.reconciled(layout, with: panes.map(\.id), bounds: bounds)
-    }
-
-    /// Encaixa o painel `id` (já em `panes`) dividindo `target`, ou o maior painel se o alvo não
-    /// estiver aqui. Sem `edge`, divide no eixo mais longo do alvo.
-    mutating func insertInLayout(_ id: UUID, splitting target: UUID?, edge: SplitNode.Edge? = nil, bounds: CGSize) {
-        guard var node = layout?.pruned(keeping: Set(panes.map(\.id).filter { $0 != id })) else {
-            syncLayout(bounds: bounds)
-            return
-        }
-        let rect = CGRect(origin: .zero, size: bounds)
-        guard let target = target.flatMap({ node.contains($0) ? $0 : nil }) ?? node.largestPane(in: rect) else { return }
-        node = edge.map { node.inserting(id, at: $0, of: target) } ?? node.inserting(id, splitting: target, in: rect)
-        layout = node
-        syncLayout(bounds: bounds)
-    }
 
     func nextPaneName() -> String {
         let used = Set(panes.map(\.name))
@@ -86,10 +99,6 @@ final class WorkspaceStore: ObservableObject {
         didSet { UserDefaults.standard.set(selectedID?.uuidString, forKey: "selectedWorkspace") }
     }
 
-    /// Tamanho da área dos painéis, para decidir o eixo de cada divisão nova. A view atualiza.
-    var layoutBounds = WorkspaceStore.defaultLayoutBounds
-    static let defaultLayoutBounds = CGSize(width: 1250, height: 800)
-
     init() {
         if let data = try? Data(contentsOf: Paths.workspacesFile),
            let decoded = try? JSONDecoder().decode([Workspace].self, from: data) {
@@ -97,7 +106,6 @@ final class WorkspaceStore: ObservableObject {
             workspaces = decoded.map { ws in
                 var ws = ws
                 ws.panes.removeAll { $0.isAwaitingRole }
-                ws.syncLayout(bounds: Self.defaultLayoutBounds)
                 return ws
             }
         } else {
@@ -126,7 +134,6 @@ final class WorkspaceStore: ObservableObject {
         guard let i = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
         var ws = workspaces[i]
         change(&ws)
-        ws.syncLayout(bounds: layoutBounds)
         if ws != workspaces[i] { workspaces[i] = ws }
     }
 
