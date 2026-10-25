@@ -29,10 +29,9 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     /// Painel aberto pelo ⌘T esperando a escolha de papel; o claude ainda não iniciou.
     /// Não sobrevive a reabrir o app (é descartado ao carregar).
     var awaitingRole: Bool?
-    /// Quantas colunas e linhas do grid o painel ocupa. Arquivos antigos não têm: 1.
-    /// Um span maior que o grid é limitado ao que cabe na hora de montar (o valor salvo não muda).
-    var colSpan = 1
-    var rowSpan = 1
+    /// Zona do workspace onde o painel fica. nil, ou uma zona que não existe mais (arquivos
+    /// de versões antigas), é resolvido pela regra do painel novo ao carregar.
+    var zone: UUID?
 
     var isAwaitingRole: Bool { awaitingRole == true }
 
@@ -44,42 +43,82 @@ struct PaneSpec: Codable, Identifiable, Equatable {
     }
 }
 
-extension PaneSpec {
-    // Decodificação escrita à mão só para que colSpan e rowSpan tenham padrão 1
-    // quando faltam (workspaces.json de versões anteriores). A codificação continua sintetizada.
-    // O campo `layout` gravado pela 0.3.6 (árvore de divisões) é ignorado.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        kind = try c.decode(Kind.self, forKey: .kind)
-        name = try c.decode(String.self, forKey: .name)
-        accountID = try c.decode(UUID.self, forKey: .accountID)
-        directory = try c.decode(String.self, forKey: .directory)
-        claudeSessionID = try c.decodeIfPresent(String.self, forKey: .claudeSessionID)
-        claudeTranscriptPath = try c.decodeIfPresent(String.self, forKey: .claudeTranscriptPath)
-        role = try c.decodeIfPresent(RoleID.self, forKey: .role)
-        model = try c.decodeIfPresent(String.self, forKey: .model)
-        effort = try c.decodeIfPresent(String.self, forKey: .effort)
-        systemPrompt = try c.decodeIfPresent(String.self, forKey: .systemPrompt)
-        branch = try c.decodeIfPresent(String.self, forKey: .branch)
-        awaitingRole = try c.decodeIfPresent(Bool.self, forKey: .awaitingRole)
-        colSpan = Self.clampSpan(try c.decodeIfPresent(Int.self, forKey: .colSpan) ?? 1)
-        rowSpan = Self.clampSpan(try c.decodeIfPresent(Int.self, forKey: .rowSpan) ?? 1)
-    }
-}
-
-extension PaneSpec {
-    static let maxSpan = 12
-
-    static func clampSpan(_ span: Int) -> Int { min(max(span, 1), maxSpan) }
-}
-
-/// Um projeto: uma pasta e o grid de painéis que trabalham nela.
+/// Um projeto: uma pasta e os painéis que trabalham nela, arrumados em zonas.
+///
+/// Arquivos de versões anteriores abrem no modelo Automático (uma zona só): o `layout` da 0.3.6
+/// (árvore de painéis) e o `colSpan`/`rowSpan` da 0.3.7 são ignorados.
 struct Workspace: Codable, Identifiable, Equatable {
     var id = UUID()
     var name: String
     var directory: String
     var panes: [PaneSpec] = []
+    /// Zonas de encaixe. nil em arquivos antigos e em workspace recém-criado: uma zona só,
+    /// com o id do próprio workspace (estável, então os painéis não perdem a zona).
+    var zones: SplitNode?
+
+    var zoneLayout: SplitNode { zones ?? .zone(id) }
+
+    /// Painéis da zona, na ordem do workspace (a ordem do grid dentro dela).
+    func panes(in zone: UUID) -> [PaneSpec] { panes.filter { $0.zone == zone } }
+
+    /// Garante zonas e uma zona válida para cada painel. Nunca tira zonas: fechar um painel
+    /// deixa a zona dele como estava (vazia, se era o único).
+    mutating func syncZones() {
+        if zones == nil { zones = .zone(id) }
+        let valid = Set(zoneLayout.zoneIDs)
+        for i in panes.indices where panes[i].zone.map({ !valid.contains($0) }) ?? true {
+            panes[i].zone = nil
+        }
+        for i in panes.indices where panes[i].zone == nil {
+            panes[i].zone = zoneForNewPane()
+        }
+    }
+
+    /// Regra do painel novo: a zona com menos painéis (vazias primeiro); no empate, a última
+    /// na ordem da árvore.
+    func zoneForNewPane() -> UUID {
+        let ids = zoneLayout.zoneIDs
+        var counts: [UUID: Int] = [:]
+        for pane in panes { if let z = pane.zone { counts[z, default: 0] += 1 } }
+        var best = ids[0]
+        for id in ids where counts[id, default: 0] <= counts[best, default: 0] { best = id }
+        return best
+    }
+
+    /// Troca as zonas pelas de um modelo (com ids novos). Painel 1 na zona 1, painel 2 na
+    /// zona 2…; o excesso vai pela regra do painel novo.
+    mutating func apply(_ template: SplitNode) {
+        let layout = template.withFreshIDs()
+        let ids = layout.zoneIDs
+        zones = layout
+        for i in panes.indices { panes[i].zone = i < ids.count ? ids[i] : nil }
+        syncZones()
+    }
+
+    /// Põe o painel na zona `zone`, depois dos que já estão lá.
+    mutating func move(_ paneID: UUID, toZone zone: UUID) {
+        guard zoneLayout.contains(zone), let i = panes.firstIndex(where: { $0.id == paneID }),
+              panes[i].zone != zone else { return }
+        var pane = panes.remove(at: i)
+        pane.zone = zone
+        let after = panes.lastIndex { $0.zone == zone }.map { $0 + 1 } ?? panes.count
+        panes.insert(pane, at: after)
+    }
+
+    /// Cria uma zona no lado `edge` da zona `target` (dividindo-a) e põe o painel nela.
+    mutating func split(_ target: UUID, at edge: SplitNode.Edge, movingPane paneID: UUID) {
+        guard zoneLayout.contains(target) else { return }
+        let new = UUID()
+        zones = zoneLayout.inserting(new, at: edge, of: target)
+        move(paneID, toZone: new)
+    }
+
+    /// Tira as zonas sem painel (o espaço vai para a vizinha). Sobra pelo menos uma.
+    mutating func removeEmptyZones() {
+        let used = Set(panes.compactMap(\.zone))
+        zones = zoneLayout.pruned(keeping: used) ?? .zone(zoneLayout.zoneIDs[0])
+        syncZones()
+    }
 
     func nextPaneName() -> String {
         let used = Set(panes.map(\.name))
@@ -106,6 +145,7 @@ final class WorkspaceStore: ObservableObject {
             workspaces = decoded.map { ws in
                 var ws = ws
                 ws.panes.removeAll { $0.isAwaitingRole }
+                ws.syncZones()
                 return ws
             }
         } else {
@@ -134,6 +174,7 @@ final class WorkspaceStore: ObservableObject {
         guard let i = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
         var ws = workspaces[i]
         change(&ws)
+        ws.syncZones()
         if ws != workspaces[i] { workspaces[i] = ws }
     }
 
