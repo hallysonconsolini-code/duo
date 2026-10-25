@@ -248,7 +248,7 @@ final class Cockpit: ObservableObject {
         return list[(i + 1) % list.count].id
     }
 
-    /// O painel novo entra no fim do grid.
+    /// O painel novo entra na zona com menos painéis (`Workspace.zoneForNewPane`).
     @discardableResult
     func addPane(kind: PaneSpec.Kind, accountID: UUID?, in workspaceID: UUID? = nil,
                  prompt: String? = nil, focus: Bool = true, askRole: Bool = false) -> PaneSpec? {
@@ -298,62 +298,54 @@ final class Cockpit: ObservableObject {
         }
     }
 
-    // MARK: Tamanho e lugar no grid
+    // MARK: Zonas
 
-    /// Muda quantas células o painel ocupa. Só o frame muda: o terminal continua o mesmo.
-    func setSpan(cols: Int, rows: Int, for paneID: UUID) {
-        workspaces.updatePane(paneID) {
-            $0.colSpan = PaneSpec.clampSpan(cols)
-            $0.rowSpan = PaneSpec.clampSpan(rows)
-        }
+    /// Modelos de zonas salvos pelo usuário (layouts.json).
+    let layouts = LayoutStore()
+
+    /// Modelos de zonas que dá para aplicar: os prontos e os salvos.
+    var zoneTemplates: [ZoneTemplate] { layouts.all }
+
+    /// Troca as zonas do workspace atual pelas de um modelo. Só os frames mudam: os
+    /// terminais continuam os mesmos.
+    func applyTemplate(_ template: ZoneTemplate) {
+        guard let id = workspaces.selectedID, teamSetup == nil else { return }
+        workspaces.update(id) { $0.apply(template.layout) }
+        zoomed = false
     }
 
-    /// Atalho de aumentar/diminuir o painel em foco, uma célula por vez, alternando largura e
-    /// altura: 1×1 → 2×1 → 2×2 → 3×2 → 3×3... A largura para no número de colunas do grid.
-    func resizeFocusedPane(bigger: Bool) {
-        guard let id = focusedPane, let pane = workspaces.pane(id),
-              let ws = workspaces.workspace(containing: id) else { return }
-        let columns = GridLayout.columns(for: ws.panes.count)
-        var cols = min(pane.colSpan, columns), rows = pane.rowSpan
-        if bigger {
-            if cols <= rows, cols < columns { cols += 1 } else { rows += 1 }
-        } else {
-            if rows >= cols, rows > 1 { rows -= 1 } else if cols > 1 { cols -= 1 } else { return }
-        }
-        setSpan(cols: cols, rows: min(rows, PaneSpec.maxSpan), for: id)
-    }
-
-    /// Volta o painel em foco a uma célula.
-    func normalSizeFocusedPane() {
-        guard let id = focusedPane else { return }
-        setSpan(cols: 1, rows: 1, for: id)
-    }
-
-    /// Todos os painéis do workspace atual com uma célula, na ordem em que estão.
-    func reorganizePanes() {
+    /// Partes iguais em todas as divisões de zonas do workspace atual.
+    func balanceZones() {
         guard let id = workspaces.selectedID else { return }
-        workspaces.update(id) { ws in
-            for i in ws.panes.indices {
-                ws.panes[i].colSpan = 1
-                ws.panes[i].rowSpan = 1
-            }
+        workspaces.update(id) { $0.zones = $0.zoneLayout.balanced() }
+    }
+
+    func removeEmptyZones() {
+        guard let id = workspaces.selectedID else { return }
+        workspaces.update(id) { $0.removeEmptyZones() }
+    }
+
+    /// Grava as zonas depois de arrastar uma divisória.
+    func setZones(_ zones: SplitNode, in workspaceID: UUID) {
+        workspaces.update(workspaceID) { ws in
+            if Set(zones.zoneIDs) == Set(ws.zoneLayout.zoneIDs) { ws.zones = zones }
         }
     }
 
-    /// Resultado de arrastar a borda de um painel: nova ordem dos painéis e o span de cada um.
-    func applyGrid(order: [UUID], spans: [UUID: GridLayout.Span], in workspaceID: UUID) {
-        workspaces.update(workspaceID) { ws in
-            guard Set(order) == Set(ws.panes.map(\.id)) else { return }
-            let byID = Dictionary(uniqueKeysWithValues: ws.panes.map { ($0.id, $0) })
-            ws.panes = order.compactMap { id in
-                guard var pane = byID[id] else { return nil }
-                if let span = spans[id] {
-                    pane.colSpan = PaneSpec.clampSpan(span.col)
-                    pane.rowSpan = PaneSpec.clampSpan(span.row)
-                }
-                return pane
-            }
-        }
+    /// Leva o painel para outra zona (fica depois dos que já estão lá).
+    func movePane(_ paneID: UUID, toZone zone: UUID) {
+        guard let ws = workspaces.workspace(containing: paneID) else { return }
+        workspaces.update(ws.id) { $0.move(paneID, toZone: zone) }
+        focusedPane = paneID
+        focusViewOfFocusedPane()
+    }
+
+    /// Cria uma zona no lado `edge` da zona `target` e põe o painel nela.
+    func movePane(_ paneID: UUID, toNewZoneAt edge: SplitNode.Edge, of target: UUID) {
+        guard let ws = workspaces.workspace(containing: paneID) else { return }
+        workspaces.update(ws.id) { $0.split(target, at: edge, movingPane: paneID) }
+        focusedPane = paneID
+        focusViewOfFocusedPane()
     }
 
     /// Troca dois painéis de lugar na ordem do grid (cada um leva o próprio tamanho).
@@ -395,7 +387,7 @@ final class Cockpit: ObservableObject {
     }
 
     /// Área dos painéis (a view marca onde fica). Arrastar ali não move a janela: a barra do
-    /// painel arrasta o painel, e as bordas redimensionam.
+    /// painel arrasta o painel, e as divisórias redimensionam as zonas.
     weak var paneArea: NSView?
     /// Janela em que o arrasto pelo fundo foi desligado (clique na área dos painéis).
     private weak var unmovableWindow: NSWindow?

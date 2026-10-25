@@ -65,6 +65,8 @@ private struct TitleBar: View {
                 .help("Atualizar o Duo")
             }
             Spacer()
+            LayoutButton()
+                .padding(.trailing, 4)
             HStack(spacing: 14) {
                 hint("⌘T", "novo painel")
                 hint("⇧⌘T", "outra conta")
@@ -401,44 +403,37 @@ private struct TerminalPaneHost: View {
     }
 }
 
-// MARK: Grid
+// MARK: Zonas e grid
 
-/// Painéis em posição absoluta dentro do espaço disponível, nas células do `GridLayout`. Cada
-/// painel é identificado pelo id: redimensionar, trocar de lugar, abrir ou fechar outro painel só
-/// muda o frame, sem recriar a view nem tirar o terminal (NSView do SwiftTerm) do lugar. No zoom,
-/// os outros painéis continuam na árvore, escondidos, pelo mesmo motivo.
+/// Zonas de encaixe do workspace e, dentro de cada uma, os painéis em grid automático. Tudo em
+/// posição absoluta: cada painel é identificado pelo id, então mover, trocar de lugar, trocar
+/// de modelo ou arrastar uma divisória só muda o frame, sem recriar a view nem tirar o terminal
+/// (NSView do SwiftTerm) do lugar. No zoom, os outros painéis continuam na árvore, escondidos.
 private struct PaneGrid: View {
     @EnvironmentObject var cockpit: Cockpit
     let workspace: Workspace
 
-    static let spacing: CGFloat = 6
-    static let padding: CGFloat = 6
-
-    /// Arrasto de uma borda em andamento. Nada muda até soltar; até lá só a prévia aparece.
-    @State private var resize: ResizeDrag?
-    /// Painel sendo arrastado pela barra e o painel com que ele trocaria de lugar.
+    /// Zonas durante o arrasto de uma divisória (gravadas só ao soltar).
+    @State private var live: SplitNode?
+    /// Zonas e retângulo da divisão quando o arrasto começou.
+    @State private var dragStart: (zones: SplitNode, splitRect: CGRect)?
+    /// Painel sendo arrastado pela barra e onde ele cairia.
     @State private var move: PaneMove?
-
-    private struct ResizeDrag {
-        let pane: UUID
-        let edges: ResizeEdges
-        /// Grid quando o arrasto começou: as colunas e as linhas de referência ficam fixas.
-        let layout: GridLayout
-        let item: GridLayout.Item
-        let rect: CGRect
-        var preview: Preview?
-    }
-
-    /// Como o grid fica se soltar agora.
-    private struct Preview {
-        let order: [UUID]
-        let spans: [UUID: GridLayout.Span]
-        let frames: [UUID: CGRect]
-    }
 
     private struct PaneMove: Equatable {
         let pane: UUID
-        var target: UUID?
+        /// Zona de destino (outra zona que não a do painel).
+        var zone: UUID?
+        /// Painel da mesma zona com que ele trocaria de lugar.
+        var swap: UUID?
+        /// Shift: criar uma zona nova nessa borda da zona sob o cursor.
+        var newZone: (zone: UUID, edge: SplitNode.Edge)?
+        var shift = false
+
+        static func == (a: PaneMove, b: PaneMove) -> Bool {
+            a.pane == b.pane && a.zone == b.zone && a.swap == b.swap && a.shift == b.shift
+                && a.newZone?.zone == b.newZone?.zone && a.newZone?.edge == b.newZone?.edge
+        }
     }
 
     private var zoomedID: UUID? {
@@ -446,189 +441,255 @@ private struct PaneGrid: View {
         return id
     }
 
-    private static func spans(_ panes: [PaneSpec]) -> [GridLayout.Span] {
-        panes.map { (col: $0.colSpan, row: $0.rowSpan) }
+    private var zones: SplitNode {
+        if let live, Set(live.zoneIDs) == Set(workspace.zoneLayout.zoneIDs) { return live }
+        return workspace.zoneLayout
     }
 
     var body: some View {
         let panes = workspace.panes
-        let layout = GridLayout.make(spans: Self.spans(panes))
-        let display = layout.display
+        let zones = zones
         let zoomedID = zoomedID
-        let editable = zoomedID == nil && panes.count > 1
         GeometryReader { geo in
-            let full = CGRect(origin: .zero, size: geo.size).insetBy(dx: Self.padding, dy: Self.padding)
-            let frames = Dictionary(uniqueKeysWithValues: zip(panes, display.items).map {
-                ($0.id, display.frame(of: $1, in: geo.size, spacing: Self.spacing, padding: Self.padding))
-            })
+            let full = CGRect(origin: .zero, size: geo.size).insetBy(dx: SplitNode.padding, dy: SplitNode.padding)
+            let zoneFrames = zones.frames(in: full)
+            let frames = Self.paneFrames(workspace, zoneFrames)
+            let emptyZones = zones.zoneIDs.filter { z in !panes.contains { $0.zone == z } }
             ZStack(alignment: .topLeading) {
-                PaneArea(chromes: editable ? Self.chromeRects(frames) : [:]) { id, location, ended in
-                    dragPane(id, to: location, ended: ended, frames: frames)
+                PaneArea(chromes: zoomedID == nil ? Self.chromeRects(frames) : [:]) { id, location, shift, ended in
+                    dragPane(id, to: location, shift: shift, ended: ended, zoneFrames: zoneFrames, frames: frames)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
+                if zoomedID == nil {
+                    ForEach(emptyZones, id: \.self) { z in
+                        if let rect = zoneFrames[z] {
+                            EmptyZone()
+                                .frame(width: rect.width, height: rect.height)
+                                .position(x: rect.midX, y: rect.midY)
+                        }
+                    }
+                }
                 ForEach(panes) { pane in
                     let hidden = zoomedID != nil && zoomedID != pane.id
                     let rect = zoomedID == pane.id ? full : (frames[pane.id] ?? .zero)
-                    PaneView(pane: pane, hidden: hidden, isMoving: move?.pane == pane.id || resize?.pane == pane.id)
+                    PaneView(pane: pane, hidden: hidden, isMoving: move?.pane == pane.id)
                         .frame(width: max(rect.width, 0), height: max(rect.height, 0))
                         .position(x: rect.midX, y: rect.midY)
                         .opacity(hidden ? 0 : 1)
                         .allowsHitTesting(!hidden)
                         .zIndex(zoomedID == pane.id ? 1 : 0)
                 }
-                if editable {
-                    ForEach(Self.grips(frames, order: panes.map(\.id))) { grip in
-                        EdgeHandle(edges: grip.edges) { phase in
-                            dragEdge(grip, phase, layout: layout, panes: panes, size: geo.size)
+                if zoomedID == nil {
+                    ForEach(zones.dividers(in: full)) { divider in
+                        DividerHandle(axis: divider.axis) { phase in
+                            dragDivider(divider, phase)
                         }
-                        .frame(width: grip.rect.width, height: grip.rect.height)
-                        .position(x: grip.rect.midX, y: grip.rect.midY)
+                        .frame(width: divider.rect.width, height: divider.rect.height)
+                        .position(x: divider.rect.midX, y: divider.rect.midY)
                         .zIndex(2)
                     }
                 }
-                if let preview = resize?.preview, let dragged = resize?.pane {
-                    ForEach(preview.order, id: \.self) { id in
-                        if let rect = preview.frames[id] {
-                            Outline(style: id == dragged ? .target : .other)
-                                .frame(width: rect.width, height: rect.height)
-                                .position(x: rect.midX, y: rect.midY)
-                                .allowsHitTesting(false)
-                                .zIndex(id == dragged ? 4 : 3)
-                        }
-                    }
-                }
-                if let move, let target = move.target, let rect = frames[target] {
-                    Outline(style: .target)
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
+                if let move {
+                    dropPreview(move, zones: zones, zoneFrames: zoneFrames, frames: frames)
+                    ShiftHint(active: move.shift)
+                        .frame(width: ShiftHintView.size.width, height: ShiftHintView.size.height)
+                        .position(x: geo.size.width / 2, y: SplitNode.padding + PaneChrome.height / 2)
                         .allowsHitTesting(false)
-                        .zIndex(4)
+                        .zIndex(5)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
     }
 
-    // MARK: Bordas
-
-    /// Uma faixa de pegar em cada borda e um quadrado em cada canto de cada painel. Metade do
-    /// vão entre painéis é de cada um, então a borda de um não é a do vizinho: quem é arrastado
-    /// é quem cresce. A parte de dentro fica na moldura do painel, fora da NSView do terminal.
-    private struct Grip: Identifiable {
-        let pane: UUID
-        let edges: ResizeEdges
-        let rect: CGRect
-        var id: String { "\(pane.uuidString)-\(edges.rawValue)" }
-    }
-
-    private static func grips(_ frames: [UUID: CGRect], order: [UUID]) -> [Grip] {
-        let outside = spacing / 2, inside: CGFloat = 5, corner: CGFloat = 14
-        let t = outside + inside
-        return order.compactMap { id in frames[id].map { (id, $0) } }.flatMap { id, r -> [Grip] in
-            let midW = max(r.width - 2 * (corner - outside), 0), midH = max(r.height - 2 * (corner - outside), 0)
-            return [
-                Grip(pane: id, edges: .left, rect: CGRect(x: r.minX - outside, y: r.minY + corner - outside, width: t, height: midH)),
-                Grip(pane: id, edges: .right, rect: CGRect(x: r.maxX - inside, y: r.minY + corner - outside, width: t, height: midH)),
-                Grip(pane: id, edges: .top, rect: CGRect(x: r.minX + corner - outside, y: r.minY - outside, width: midW, height: t)),
-                Grip(pane: id, edges: .bottom, rect: CGRect(x: r.minX + corner - outside, y: r.maxY - inside, width: midW, height: t)),
-                Grip(pane: id, edges: [.top, .left], rect: CGRect(x: r.minX - outside, y: r.minY - outside, width: corner, height: corner)),
-                Grip(pane: id, edges: [.top, .right], rect: CGRect(x: r.maxX + outside - corner, y: r.minY - outside, width: corner, height: corner)),
-                Grip(pane: id, edges: [.bottom, .left], rect: CGRect(x: r.minX - outside, y: r.maxY + outside - corner, width: corner, height: corner)),
-                Grip(pane: id, edges: [.bottom, .right], rect: CGRect(x: r.maxX + outside - corner, y: r.maxY + outside - corner, width: corner, height: corner)),
-            ]
+    /// Durante o arrasto pela barra: todas as zonas por cima de tudo, com realce no destino.
+    @ViewBuilder
+    private func dropPreview(_ move: PaneMove, zones: SplitNode, zoneFrames: [UUID: CGRect], frames: [UUID: CGRect]) -> some View {
+        ForEach(zones.zoneIDs, id: \.self) { z in
+            if let rect = zoneFrames[z] {
+                Outline(style: move.zone == z && move.newZone == nil ? .target : .zone)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+                    .allowsHitTesting(false)
+                    .zIndex(3)
+            }
+        }
+        if let target = move.newZone, let rect = zoneFrames[target.zone] {
+            let half = Self.half(of: rect, target.edge)
+            Outline(style: .target)
+                .frame(width: half.width, height: half.height)
+                .position(x: half.midX, y: half.midY)
+                .allowsHitTesting(false)
+                .zIndex(4)
+        } else if let swap = move.swap, let rect = frames[swap] {
+            Outline(style: .target)
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .allowsHitTesting(false)
+                .zIndex(4)
         }
     }
 
-    /// Arrastar uma borda: as bordas arrastadas encaixam na linha de grade mais próxima, com as
-    /// colunas e linhas do grid de quando o arrasto começou. O painel passa a ocupar essas
-    /// células e os outros são reempacotados em volta (ver `GridLayout.resizing`).
-    private func dragEdge(_ grip: Grip, _ phase: EdgeHandleView.Phase, layout: GridLayout, panes: [PaneSpec], size: CGSize) {
+    /// Retângulo de cada painel: o grid automático de cada zona, dentro do retângulo dela.
+    private static func paneFrames(_ ws: Workspace, _ zoneFrames: [UUID: CGRect]) -> [UUID: CGRect] {
+        var out: [UUID: CGRect] = [:]
+        for (zone, rect) in zoneFrames {
+            let inZone = ws.panes(in: zone)
+            guard !inZone.isEmpty else { continue }
+            let grid = GridLayout.make(count: inZone.count).display
+            for (pane, item) in zip(inZone, grid.items) {
+                out[pane.id] = grid.frame(of: item, in: rect.size, spacing: SplitNode.spacing, padding: 0)
+                    .offsetBy(dx: rect.minX, dy: rect.minY)
+            }
+        }
+        return out
+    }
+
+    /// Menor tamanho de uma zona: o grid dos painéis dela com o mínimo de cada painel.
+    private func zoneMin(_ zone: UUID) -> CGSize {
+        let count = workspace.panes(in: zone).count
+        guard count > 0 else { return SplitNode.minPaneSize }
+        let grid = GridLayout.make(count: count)
+        let min = SplitNode.minPaneSize, gap = SplitNode.spacing
+        return CGSize(width: CGFloat(grid.columns) * (min.width + gap) - gap,
+                      height: CGFloat(grid.rows) * (min.height + gap) - gap)
+    }
+
+    // MARK: Divisórias entre zonas
+
+    private func dragDivider(_ divider: SplitNode.Divider, _ phase: DividerHandleView.Phase) {
         switch phase {
         case .began:
-            guard let index = panes.firstIndex(where: { $0.id == grip.pane }) else { return }
-            let item = layout.items[index]
-            resize = ResizeDrag(pane: grip.pane, edges: grip.edges, layout: layout, item: item,
-                                rect: layout.frame(of: item, in: size, spacing: Self.spacing, padding: Self.padding))
-            if cockpit.focusedPane != grip.pane { cockpit.focusedPane = grip.pane }
+            dragStart = (zones, divider.splitRect)
         case .moved(let delta):
-            guard var drag = resize, let index = panes.firstIndex(where: { $0.id == drag.pane }) else { return }
-            let target = Self.target(for: drag, delta: delta, size: size)
-            if target == drag.item {
-                drag.preview = nil
-            } else {
-                let result = GridLayout.resizing(spans: Self.spans(panes), index: index, to: target, columns: drag.layout.columns)
-                let final = GridLayout.make(spans: result.spans, columns: drag.layout.columns).display
-                let order = result.order.map { panes[$0].id }
-                drag.preview = Preview(
-                    order: order,
-                    spans: Dictionary(uniqueKeysWithValues: zip(order, result.spans)),
-                    frames: Dictionary(uniqueKeysWithValues: zip(order, final.items).map {
-                        ($0, final.frame(of: $1, in: size, spacing: Self.spacing, padding: Self.padding))
-                    })
-                )
-            }
-            resize = drag
+            guard let start = dragStart else { return }
+            live = start.zones.resizing(path: divider.path, index: divider.index, by: delta, in: start.splitRect,
+                                        zoneMin: zoneMin)
         case .ended:
-            if let preview = resize?.preview {
-                cockpit.applyGrid(order: preview.order, spans: preview.spans, in: workspace.id)
-            }
-            resize = nil
+            if let live { cockpit.setZones(live, in: workspace.id) }
+            live = nil
+            dragStart = nil
+        case .doubleClick:
+            cockpit.setZones(zones.balanced(at: divider.path), in: workspace.id)
         }
     }
 
-    private static func target(for drag: ResizeDrag, delta: CGSize, size: CGSize) -> GridLayout.Item {
-        let layout = drag.layout, item = drag.item, r = drag.rect
-        var left = item.col, right = item.maxCol, top = item.row, bottom = item.maxRow
-        if drag.edges.contains(.right) {
-            right = min(max(layout.nearestColumnLine(to: r.maxX + delta.width, in: size, spacing: spacing, padding: padding), left + 1), layout.columns)
-        }
-        if drag.edges.contains(.left) {
-            left = min(max(layout.nearestColumnLine(to: r.minX + delta.width, in: size, spacing: spacing, padding: padding), 0), right - 1)
-        }
-        if drag.edges.contains(.bottom) {
-            bottom = min(max(layout.nearestRowLine(to: r.maxY + delta.height, in: size, spacing: spacing, padding: padding), top + 1), layout.rows)
-        }
-        if drag.edges.contains(.top) {
-            top = min(max(layout.nearestRowLine(to: r.minY + delta.height, in: size, spacing: spacing, padding: padding), 0), bottom - 1)
-        }
-        return GridLayout.Item(col: left, row: top, colSpan: right - left, rowSpan: bottom - top)
-    }
-
-    // MARK: Trocar de lugar
+    // MARK: Arrastar para zona
 
     /// Barra de cada painel (de onde se arrasta o painel).
     static func chromeRects(_ frames: [UUID: CGRect]) -> [UUID: CGRect] {
         frames.mapValues { CGRect(x: $0.minX, y: $0.minY, width: $0.width, height: min(PaneChrome.height, $0.height)) }
     }
 
-    /// Arrastar a barra de um painel sobre outro: ao soltar, os dois trocam de lugar na ordem do grid.
-    private func dragPane(_ id: UUID, to location: CGPoint, ended: Bool, frames: [UUID: CGRect]) {
-        guard zoomedID == nil, workspace.panes.count > 1 else { move = nil; return }
+    /// Soltar sobre outra zona leva o painel para lá; sobre um painel da mesma zona, os dois
+    /// trocam de lugar.
+    private func dragPane(_ id: UUID, to location: CGPoint, shift: Bool, ended: Bool,
+                          zoneFrames: [UUID: CGRect], frames: [UUID: CGRect]) {
+        guard zoomedID == nil, let pane = workspace.panes.first(where: { $0.id == id }) else { move = nil; return }
         var next = PaneMove(pane: id)
-        next.target = frames.first { $0.key != id && $0.value.contains(location) }?.key
+        next.shift = shift
+        let zoneUnder = zoneFrames.first { $0.value.contains(location) }?.key
+        if shift, let zoneUnder, let rect = zoneFrames[zoneUnder] {
+            // Shift: a borda da zona mais próxima do mouse ganha uma zona nova.
+            let dx = (location.x - rect.minX) / max(rect.width, 1)
+            let dy = (location.y - rect.minY) / max(rect.height, 1)
+            let distances: [(SplitNode.Edge, CGFloat)] = [(.left, dx), (.right, 1 - dx), (.top, dy), (.bottom, 1 - dy)]
+            next.newZone = (zoneUnder, distances.min { $0.1 < $1.1 }!.0)
+        } else if let other = frames.first(where: { $0.key != id && $0.value.contains(location) })?.key,
+           workspace.panes.first(where: { $0.id == other })?.zone == pane.zone {
+            next.swap = other
+        } else if let zoneUnder, zoneUnder != pane.zone {
+            next.zone = zoneUnder
+        }
         if ended {
             move = nil
-            if let target = next.target { cockpit.swapPanes(id, target) }
+            if let target = next.newZone {
+                cockpit.movePane(id, toNewZoneAt: target.edge, of: target.zone)
+            } else if let swap = next.swap {
+                cockpit.swapPanes(id, swap)
+            } else if let zone = next.zone {
+                cockpit.movePane(id, toZone: zone)
+            }
         } else if move != next {
             move = next
         }
     }
+
+    /// Metade da zona do lado onde a zona nova entra.
+    static func half(of rect: CGRect, _ edge: SplitNode.Edge) -> CGRect {
+        switch edge {
+        case .left: CGRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height)
+        case .right: CGRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height)
+        case .top: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height / 2)
+        case .bottom: CGRect(x: rect.minX, y: rect.midY, width: rect.width, height: rect.height / 2)
+        }
+    }
 }
 
-/// Bordas de um painel que um arrasto move.
-struct ResizeEdges: OptionSet, Hashable {
-    let rawValue: Int
-    static let left = ResizeEdges(rawValue: 1)
-    static let right = ResizeEdges(rawValue: 2)
-    static let top = ResizeEdges(rawValue: 4)
-    static let bottom = ResizeEdges(rawValue: 8)
+/// Aviso durante o arrasto pela barra: com Shift, soltar na borda de uma zona cria uma zona
+/// nova ali. Aceso quando o Shift está apertado. NSView para ficar acima dos terminais.
+private struct ShiftHint: NSViewRepresentable {
+    let active: Bool
+
+    func makeNSView(context: Context) -> ShiftHintView { ShiftHintView() }
+
+    func updateNSView(_ view: ShiftHintView, context: Context) {
+        if view.active != active { view.active = active }
+    }
 }
 
-/// Contorno desenhado por cima dos painéis: o novo tamanho do painel arrastado (ou o painel com
-/// que ele vai trocar de lugar) e, mais fraco, onde os outros vão parar. É uma NSView para ficar
-/// acima das NSViews dos terminais.
+final class ShiftHintView: NSView {
+    static let size = CGSize(width: 150, height: 24)
+
+    var active = false { didSet { update() } }
+    private let label = NSTextField(labelWithString: "⇧ Shift: nova zona")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        label.font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        update()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) não usado") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func update() {
+        let accent = NSColor(Theme.accent)
+        layer?.backgroundColor = (active ? accent.withAlphaComponent(0.9) : Theme.nsBg.withAlphaComponent(0.92)).cgColor
+        layer?.borderColor = (active ? accent : Theme.nsText.withAlphaComponent(0.25)).cgColor
+        label.textColor = active ? .white : Theme.nsText.withAlphaComponent(0.7)
+    }
+}
+
+/// Zona sem painel: área tracejada discreta.
+private struct EmptyZone: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(Theme.paneBorder, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            .overlay {
+                Text("solte um painel aqui")
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.faint)
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+/// Contorno desenhado por cima dos painéis durante o arrasto: cada zona (`.zone`) e o destino
+/// (`.target`). É uma NSView para ficar acima das NSViews dos terminais.
 private struct Outline: NSViewRepresentable {
-    enum Style { case target, other }
+    enum Style { case target, zone }
     let style: Style
 
     func makeNSView(context: Context) -> OutlineView { OutlineView() }
@@ -648,12 +709,12 @@ final class OutlineView: NSView {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 8, yRadius: 8)
         switch style {
         case .target:
-            accent.withAlphaComponent(0.14).setFill()
+            accent.withAlphaComponent(0.18).setFill()
             path.fill()
             accent.withAlphaComponent(0.9).setStroke()
             path.lineWidth = 1.5
-        case .other:
-            Theme.nsText.withAlphaComponent(0.06).setFill()
+        case .zone:
+            Theme.nsBg.withAlphaComponent(0.35).setFill()
             path.fill()
             Theme.nsText.withAlphaComponent(0.45).setStroke()
             path.lineWidth = 1
@@ -663,62 +724,61 @@ final class OutlineView: NSView {
     }
 }
 
-/// Faixa de pegar numa borda (ou num canto) de um painel. É uma NSView para receber o clique e
-/// mostrar o cursor de redimensionar mesmo encostada na NSView do terminal.
-private struct EdgeHandle: NSViewRepresentable {
-    let edges: ResizeEdges
-    let onEvent: (EdgeHandleView.Phase) -> Void
+/// Divisória entre duas zonas vizinhas. É uma NSView para receber o mouse e mostrar o cursor
+/// de redimensionar mesmo ao lado das NSViews dos terminais.
+private struct DividerHandle: NSViewRepresentable {
+    let axis: SplitNode.Axis
+    let onEvent: (DividerHandleView.Phase) -> Void
 
-    func makeNSView(context: Context) -> EdgeHandleView { EdgeHandleView() }
+    func makeNSView(context: Context) -> DividerHandleView { DividerHandleView() }
 
-    func updateNSView(_ view: EdgeHandleView, context: Context) {
+    func updateNSView(_ view: DividerHandleView, context: Context) {
         view.onEvent = onEvent
-        if view.edges != edges {
-            view.edges = edges
+        if view.axis != axis {
+            view.axis = axis
             view.window?.invalidateCursorRects(for: view)
         }
     }
 }
 
-final class EdgeHandleView: NSView {
+final class DividerHandleView: NSView {
     enum Phase {
         case began
-        /// Deslocamento desde o clique (x para a direita, y para baixo, como no SwiftUI).
-        case moved(CGSize)
+        /// Deslocamento ao longo do eixo desde o clique (x para a direita, y para baixo).
+        case moved(CGFloat)
         case ended
+        case doubleClick
     }
 
-    var edges: ResizeEdges = .right
+    var axis: SplitNode.Axis = .horizontal { didSet { needsDisplay = true } }
     var onEvent: ((Phase) -> Void)?
     private var start: NSPoint?
+    private var hover = false { didSet { needsDisplay = true } }
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    private var cursor: NSCursor {
-        if #available(macOS 15, *) {
-            let position: NSCursor.FrameResizePosition
-            switch edges {
-            case [.top, .left]: position = .topLeft
-            case [.top, .right]: position = .topRight
-            case [.bottom, .left]: position = .bottomLeft
-            case [.bottom, .right]: position = .bottomRight
-            case .left: position = .left
-            case .right: position = .right
-            case .top: position = .top
-            default: position = .bottom
-            }
-            return .frameResize(position: position, directions: .all)
-        }
-        if edges == .left || edges == .right { return .resizeLeftRight }
-        if edges == .top || edges == .bottom { return .resizeUpDown }
-        return .crosshair
-    }
+    private var cursor: NSCursor { axis == .horizontal ? .resizeLeftRight : .resizeUpDown }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: cursor) }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hover = true }
+    override func mouseExited(with event: NSEvent) { hover = false }
+
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            start = nil
+            onEvent?(.doubleClick)
+            return
+        }
         start = event.locationInWindow
         onEvent?(.began)
     }
@@ -726,13 +786,25 @@ final class EdgeHandleView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let start else { return }
         cursor.set()
-        onEvent?(.moved(CGSize(width: event.locationInWindow.x - start.x, height: start.y - event.locationInWindow.y)))
+        // Em coordenadas de janela o y cresce para cima; aqui, para baixo (como no SwiftUI).
+        let delta = axis == .horizontal ? event.locationInWindow.x - start.x : start.y - event.locationInWindow.y
+        onEvent?(.moved(delta))
     }
 
     override func mouseUp(with event: NSEvent) {
         guard start != nil else { return }
         start = nil
+        needsDisplay = true
         onEvent?(.ended)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard hover || start != nil else { return }
+        Theme.nsText.withAlphaComponent(start != nil ? 0.45 : 0.25).setFill()
+        let line = axis == .horizontal
+            ? NSRect(x: bounds.midX - 1, y: 0, width: 2, height: bounds.height)
+            : NSRect(x: 0, y: bounds.midY - 1, width: bounds.width, height: 2)
+        NSBezierPath(roundedRect: line, xRadius: 1, yRadius: 1).fill()
     }
 }
 
@@ -744,8 +816,8 @@ private struct PaneArea: NSViewRepresentable {
     @EnvironmentObject var cockpit: Cockpit
     /// Barra de cada painel, no espaço desta view (origem no canto superior esquerdo).
     let chromes: [UUID: CGRect]
-    /// Painel arrastado, posição do mouse e se o botão foi solto.
-    let onMove: (UUID, CGPoint, Bool) -> Void
+    /// Painel arrastado, posição do mouse, Shift apertado e se o botão foi solto.
+    let onMove: (UUID, CGPoint, Bool, Bool) -> Void
 
     func makeNSView(context: Context) -> PaneAreaView { PaneAreaView() }
 
@@ -758,10 +830,11 @@ private struct PaneArea: NSViewRepresentable {
 
 final class PaneAreaView: NSView {
     var chromes: [UUID: CGRect] = [:]
-    var onMove: ((UUID, CGPoint, Bool) -> Void)?
+    var onMove: ((UUID, CGPoint, Bool, Bool) -> Void)?
     private var monitor: Any?
     private var pressed: (pane: UUID, at: CGPoint)?
     private var moving = false
+    private var last: CGPoint = .zero
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -771,32 +844,38 @@ final class PaneAreaView: NSView {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         guard window != nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .flagsChanged]) { [weak self] event in
             self?.handle(event)
             return event
         }
     }
 
     private func handle(_ event: NSEvent) {
+        // Shift apertado ou solto sem mexer o mouse: atualiza o destino no mesmo lugar.
+        if event.type == .flagsChanged {
+            if let pressed, moving { onMove?(pressed.pane, last, event.modifierFlags.contains(.shift), false) }
+            return
+        }
         guard event.window === window, window != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
+        let shift = event.modifierFlags.contains(.shift)
         switch event.type {
         case .leftMouseDown:
             pressed = nil
             moving = false
             guard !isHiddenOrHasHiddenAncestor, event.clickCount == 1,
-                  !(window?.contentView?.hitTest(event.locationInWindow) is EdgeHandleView),
                   let id = chromes.first(where: { $0.value.contains(point) })?.key else { return }
             pressed = (id, point)
         case .leftMouseDragged:
             guard let pressed else { return }
             if !moving, hypot(point.x - pressed.at.x, point.y - pressed.at.y) < 6 { return }
             moving = true
+            last = point
             NSCursor.closedHand.set()
-            onMove?(pressed.pane, point, false)
+            onMove?(pressed.pane, point, shift, false)
         case .leftMouseUp:
             if let pressed, moving {
-                onMove?(pressed.pane, point, true)
+                onMove?(pressed.pane, point, shift, true)
                 NSCursor.arrow.set()
             }
             pressed = nil
@@ -934,18 +1013,7 @@ private struct PaneChrome: View {
             }
             Divider()
         }
-        Button("Aumentar") {
-            cockpit.focusedPane = pane.id
-            cockpit.resizeFocusedPane(bigger: true)
-        }
-        Button("Diminuir") {
-            cockpit.focusedPane = pane.id
-            cockpit.resizeFocusedPane(bigger: false)
-        }
-        .disabled(pane.colSpan == 1 && pane.rowSpan == 1)
-        Button("Tamanho normal") { cockpit.setSpan(cols: 1, rows: 1, for: pane.id) }
-            .disabled(pane.colSpan == 1 && pane.rowSpan == 1)
-        Button("Reorganizar painéis") { cockpit.reorganizePanes() }
+        Menu("Layout") { LayoutMenuItems(cockpit: cockpit, workspaces: workspaces) }
         Divider()
         Button("Fechar \(pane.name)") { cockpit.closePane(pane.id) }
     }

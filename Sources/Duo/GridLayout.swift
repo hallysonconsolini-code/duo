@@ -2,14 +2,11 @@ import CoreGraphics
 
 /// Posição de cada painel no grid, em células. Função pura: não sabe de SwiftUI.
 ///
-/// Regras:
-/// - colunas dependem só de quantos painéis há (tabela abaixo). O tamanho dos painéis nunca
-///   muda o número de colunas: um span maior que o grid é limitado ao que cabe (o valor salvo
-///   não muda), e as linhas crescem quando precisa;
+/// Usado dentro de cada zona, com todos os painéis 1×1. Regras:
+/// - colunas dependem só de quantos painéis há (tabela abaixo); um span maior que o grid é
+///   limitado ao que cabe, e as linhas crescem quando precisa;
 /// - empacotamento denso na ordem dos painéis: cada um vai na primeira posição livre
 ///   onde cabe (linha por linha, da esquerda para a direita);
-/// - ao redimensionar, o painel arrastado é posto primeiro no retângulo pedido e os outros
-///   são empacotados em volta, na ordem deles (ver `resizing`);
 /// - no fim, buracos são preenchidos esticando um vizinho: primeiro o da esquerda,
 ///   na mesma linha; se não der, o de cima.
 struct GridLayout: Equatable {
@@ -44,18 +41,23 @@ struct GridLayout: Equatable {
         }
     }
 
-    /// `columns` nil = pela tabela. `pinned`: painel que vai primeiro, numa posição fixa.
-    static func make(spans: [Span], columns: Int? = nil, pinned: (index: Int, item: Item)? = nil) -> GridLayout {
+    /// `count` painéis 1×1.
+    static func make(count: Int) -> GridLayout {
+        make(spans: Array(repeating: (col: 1, row: 1), count: count))
+    }
+
+    /// `columns` nil = pela tabela.
+    static func make(spans: [Span], columns: Int? = nil) -> GridLayout {
         guard !spans.isEmpty else { return .empty }
         let columns = max(columns ?? Self.columns(for: spans.count), 1)
         let spans = spans.map { (col: min(max($0.col, 1), columns), row: max($0.row, 1)) }
-        var layout = pack(spans, columns: columns, pinned: pinned).stretched()
+        var layout = pack(spans, columns: columns).stretched()
         layout.requestedColSpans = spans.map(\.col)
         return layout
     }
 
     /// Empacotamento denso (como `grid-auto-flow: dense` do CSS).
-    private static func pack(_ spans: [Span], columns: Int, pinned: (index: Int, item: Item)?) -> GridLayout {
+    private static func pack(_ spans: [Span], columns: Int) -> GridLayout {
         var occupied: [[Bool]] = []
         var items = spans.map { _ in Item(col: 0, row: 0, colSpan: 1, rowSpan: 1) }
         func free(_ r: Int, _ c: Int, _ w: Int, _ h: Int) -> Bool {
@@ -68,16 +70,7 @@ struct GridLayout: Equatable {
             while occupied.count < item.maxRow { occupied.append(Array(repeating: false, count: columns)) }
             for rr in item.row..<item.maxRow { for cc in item.col..<item.maxCol { occupied[rr][cc] = true } }
         }
-        if let pinned, spans.indices.contains(pinned.index) {
-            var item = pinned.item
-            item.colSpan = min(max(item.colSpan, 1), columns)
-            item.col = min(max(item.col, 0), columns - item.colSpan)
-            item.row = max(item.row, 0)
-            item.rowSpan = max(item.rowSpan, 1)
-            items[pinned.index] = item
-            occupy(item)
-        }
-        for (i, span) in spans.enumerated() where i != pinned?.index {
+        for (i, span) in spans.enumerated() {
             let w = span.col
             let h = span.row
             var r = 0
@@ -145,23 +138,6 @@ struct GridLayout: Equatable {
         return GridLayout(columns: columns * m, rows: rows, items: scaled)
     }
 
-    /// Redimensionar: o painel `index` passa a ocupar `target` (em células deste grid, com as
-    /// mesmas colunas). Ele é posto primeiro ali; os outros vão, na ordem deles, para a primeira
-    /// posição livre (os que estavam no caminho vão para outra coluna ou para uma linha nova).
-    /// Devolve a nova ordem dos painéis (índices nos spans recebidos) e os spans nessa ordem:
-    /// empacotar isso de novo dá o mesmo grid, então é o que se grava.
-    static func resizing(spans: [Span], index: Int, to target: Item, columns: Int) -> (order: [Int], spans: [Span]) {
-        var spans = spans
-        spans[index] = (col: target.colSpan, row: target.rowSpan)
-        let placed = pack(spans.map { (col: min(max($0.col, 1), columns), row: max($0.row, 1)) },
-                          columns: columns, pinned: (index, target))
-        let order = spans.indices.sorted {
-            let a = placed.items[$0], b = placed.items[$1]
-            return (a.row, a.col) < (b.row, b.col)
-        }
-        return (order, order.map { spans[$0] })
-    }
-
     /// Retângulo de cada célula/painel dentro de `size`, com espaçamento e margem.
     func frame(of item: Item, in size: CGSize, spacing: CGFloat, padding: CGFloat) -> CGRect {
         let cell = cellSize(in: size, spacing: spacing, padding: padding)
@@ -176,19 +152,5 @@ struct GridLayout: Equatable {
     func cellSize(in size: CGSize, spacing: CGFloat, padding: CGFloat) -> CGSize {
         CGSize(width: max(0, (size.width - 2 * padding - CGFloat(columns - 1) * spacing) / CGFloat(columns)),
                height: max(0, (size.height - 2 * padding - CGFloat(rows - 1) * spacing) / CGFloat(rows)))
-    }
-
-    /// Linha de grade mais próxima de `x` (0...columns), no meio do vão entre células.
-    func nearestColumnLine(to x: CGFloat, in size: CGSize, spacing: CGFloat, padding: CGFloat) -> Int {
-        let step = cellSize(in: size, spacing: spacing, padding: padding).width + spacing
-        guard step > 0 else { return 0 }
-        return min(max(Int(((x - padding + spacing / 2) / step).rounded()), 0), columns)
-    }
-
-    /// Linha de grade mais próxima de `y` (0...rows).
-    func nearestRowLine(to y: CGFloat, in size: CGSize, spacing: CGFloat, padding: CGFloat) -> Int {
-        let step = cellSize(in: size, spacing: spacing, padding: padding).height + spacing
-        guard step > 0 else { return 0 }
-        return min(max(Int(((y - padding + spacing / 2) / step).rounded()), 0), rows)
     }
 }

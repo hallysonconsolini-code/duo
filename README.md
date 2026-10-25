@@ -4,10 +4,14 @@ App macOS para rodar vários Claude Code lado a lado, com contas diferentes, e d
 que eles conversem entre si.
 
 - **Workspaces**: cada aba é uma pasta de projeto.
-- **Painéis em grid**: cada painel é um Claude Code (ou o claude.ai) de uma conta. ⌘T abre um
-  painel novo no fim do grid, na pasta do workspace. Arraste uma borda ou um canto de um painel
-  para ele ocupar mais (ou menos) células: os painéis que estavam no caminho vão para o próximo
-  espaço livre. Arraste a barra de um painel sobre outro para os dois trocarem de lugar.
+- **Zonas de encaixe**, como no FancyZones e no Rectangle: cada painel é um Claude Code (ou o
+  claude.ai) de uma conta e fica numa zona do workspace; os painéis de uma zona dividem o espaço
+  dela em grid automático. Escolha um modelo de zonas em Painel > Layout (Automático, colunas,
+  principal + 2, foco central, 2×2…). ⌘T abre um painel novo na zona com menos painéis. Arraste
+  a barra de um painel para levá-lo a outra zona, ou sobre um painel da mesma zona para os dois
+  trocarem de lugar; com Shift, soltar na borda de uma zona cria uma zona nova ali. As
+  divisórias entre zonas arrastam livremente (duplo clique equilibra). O botão de layout na barra
+  de título mostra os modelos em miniatura e salva o layout atual como modelo (layouts.json).
 - **Contas separadas**: cada conta usa seu próprio `CLAUDE_CONFIG_DIR` (login, histórico, config)
   e seu próprio armazenamento de cookies no claude.ai. Por padrão, a Conta 1 usa o `~/.claude`.
 - **Painéis que conversam**: o app sobe um servidor MCP local (`duo`) que todo painel recebe
@@ -32,12 +36,10 @@ que eles conversem entre si.
 | ⌘W | fechar painel |
 | ⌘1…⌘9 | focar painel |
 | ⌘↩ | zoom no painel |
-| ⌃⌘= / ⌃⌘- | aumentar / diminuir o painel em foco, uma célula por vez |
-| ⌃⌘0 | painel em foco volta a uma célula |
 | ⇧⌘[ / ⇧⌘] | workspace anterior / próximo |
 
 Clique com o botão direito no cabeçalho de um painel para encaminhar a última resposta
-dele para outro painel, mudar o tamanho dele ou reorganizar os painéis (todos com uma célula).
+dele para outro painel ou trocar o modelo de zonas.
 
 ## Compilar
 
