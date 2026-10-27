@@ -12,6 +12,9 @@ que eles conversem entre si.
   trocarem de lugar; com Shift, soltar na borda de uma zona cria uma zona nova ali. As
   divisórias entre zonas arrastam livremente (duplo clique equilibra). O botão de layout na barra
   de título mostra os modelos em miniatura e salva o layout atual como modelo (layouts.json).
+- **Arrastar arquivos**: solte arquivos ou pastas do Finder em um painel e o caminho absoluto é digitado
+  no prompt (escapado com barra invertida, separado por espaço, sem Enter). O Claude Code lê o arquivo
+  pelo caminho, inclusive imagens e PDFs.
 - **Contas separadas**: cada conta usa seu próprio `CLAUDE_CONFIG_DIR` (login, histórico, config)
   e seu próprio armazenamento de cookies no claude.ai. Por padrão, a Conta 1 usa o `~/.claude`.
 - **Painéis que conversam**: o app sobe um servidor MCP local (`duo`) que todo painel recebe

@@ -7,6 +7,30 @@ import SwiftTerm
 class PaneTerminalView: LocalProcessTerminalView {
     override var mouseDownCanMoveWindow: Bool { false }
 
+    /// Moldura que aparece enquanto um arquivo é arrastado por cima do painel.
+    private lazy var dropOverlay: NSView = {
+        let overlay = DropOverlayView()
+        overlay.frame = bounds
+        overlay.autoresizingMask = [.width, .height]
+        overlay.isHidden = true
+        addSubview(overlay)
+        return overlay
+    }()
+
+    func setDropHighlight(_ on: Bool) {
+        dropOverlay.isHidden = !on
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        enableFileDrop()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        enableFileDrop()
+    }
+
     /// A seleção que o Cmd+A fez na caixa de prompt, para tirar as bordas da caixa
     /// ao copiar e para apagar o texto quando a próxima tecla pede isso.
     var promptSelection: (start: Position, end: Position)?
@@ -16,6 +40,22 @@ class PaneTerminalView: LocalProcessTerminalView {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+}
+
+/// Véu com borda por cima do terminal; não captura mouse nem drag.
+private final class DropOverlayView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(hex: "#EF4444").withAlphaComponent(0.10).cgColor
+        layer?.borderColor = NSColor(hex: "#EF4444").withAlphaComponent(0.8).cgColor
+        layer?.borderWidth = 2
+        layer?.cornerRadius = 6
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Cmd+A nos painéis: seleciona só o texto que você está digitando na caixa de
