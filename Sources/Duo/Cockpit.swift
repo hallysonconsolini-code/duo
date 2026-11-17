@@ -662,7 +662,8 @@ final class Cockpit: ObservableObject {
             case .ok(let pane, let term):
                 guard let text = args["message"] as? String, !text.isEmpty else { return ("Falta message.", true) }
                 guard term.status != .exited else { return ("\(pane.name) está encerrado.", true) }
-                term.inject("[mensagem de \(me.name)]\n\(text)")
+                let raw = args["raw"] as? Bool ?? false
+                term.inject(raw ? text : "[mensagem de \(me.name)]\n\(text)")
                 return ("Enviado para \(pane.name). Use wait_for_pane para esperar a resposta.", false)
             }
 
@@ -751,6 +752,7 @@ enum MCPTools {
                 "properties": [
                     "pane": ["type": "string", "description": "Nome do painel, ex.: p2"],
                     "message": ["type": "string", "description": "Texto da mensagem/tarefa"],
+                    "raw": ["type": "boolean", "description": "true envia o texto exatamente como está, sem o cabeçalho [mensagem de pN]. Use para comandos com barra, ex.: /remote-control."],
                 ],
                 "required": ["pane", "message"],
             ],
